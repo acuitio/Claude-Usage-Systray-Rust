@@ -30,9 +30,10 @@ windows-sys = { version = "0.59", features = [
 serde      = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
-# Future dependencies (commented until the corresponding feature lands):
-# reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-# tokio        = { version = "1",    features = ["rt", "macros", "time"] }
+# Synchronous HTTP for the Anthropic usage + OAuth-refresh endpoints. ureq
+# uses native-tls by default (SChannel on Windows) — zero extra binary cost
+# vs. rustls. No tokio required since it's blocking.
+ureq = { version = "2.10", features = ["json"] }
 
 # Optimize for minimum binary size in release.
 [profile.release]

@@ -18,6 +18,12 @@ pub unsafe fn is_open() -> bool {
     !HWND_OVERLAY.is_null() && IsWindow(HWND_OVERLAY) != 0
 }
 
+/// Force a re-render against the current cache. Called from the host
+/// window's WM_USAGE_UPDATED handler.
+pub unsafe fn on_data_changed() {
+    if is_open() { render(); }
+}
+
 pub unsafe fn toggle(_owner: HWND) {
     if is_open() {
         DestroyWindow(HWND_OVERLAY);

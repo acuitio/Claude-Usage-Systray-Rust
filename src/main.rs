@@ -25,12 +25,15 @@ mod cooldown;
 mod credentials;
 mod dashboard;
 mod models;
+mod oauth_refresh;
 mod overlay;
 mod paths;
+mod poll_service;
 mod settings;
 mod tray;
 mod tray_registry_patch;
 mod usage_cache;
+mod usage_fetcher;
 mod usage_history;
 
 use std::ptr::null_mut;
@@ -84,6 +87,10 @@ fn main() {
         // entry lazily; the timer gives it time to land before we patch.
         SetTimer(host, TIMER_PATCH, 1500, None);
 
+        // Kick off the background polling thread. It posts WM_USAGE_UPDATED
+        // back to the host window on every successful fetch.
+        poll_service::start(host);
+
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
@@ -100,6 +107,12 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
     unsafe {
         if msg == tray::WM_TRAY_CALLBACK {
             tray::handle_tray_callback(hwnd, lp);
+            return 0;
+        }
+        if msg == poll_service::WM_USAGE_UPDATED {
+            tray::refresh();
+            overlay::on_data_changed();
+            dashboard::on_data_changed();
             return 0;
         }
         match msg {

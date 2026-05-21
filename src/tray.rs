@@ -84,6 +84,30 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
     }
 }
 
+/// Re-read cache + credentials and push the updated icon + tooltip into
+/// the tray via NIM_MODIFY. Called from the host window's WM_USAGE_UPDATED
+/// handler after a successful poll.
+pub unsafe fn refresh() {
+    if TRAY_HWND.is_null() { return; }
+    let usage = current_snapshot();
+    let icon = build_tray_icon(usage.session_pct);
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = TRAY_HWND;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON | NIF_TIP;
+    nid.hIcon = icon;
+    let tip_str = format!(
+        "Usage: {:.0}% | {:.0}% | {:.0}%\n{}",
+        usage.session_pct, usage.weekly_pct, usage.sonnet_pct, usage.plan,
+    );
+    let tip = wstr(&tip_str);
+    for (i, c) in tip.iter().take(127).enumerate() {
+        nid.szTip[i] = *c;
+    }
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
 pub unsafe fn remove() {
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;

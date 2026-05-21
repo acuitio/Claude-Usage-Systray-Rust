@@ -1,5 +1,5 @@
-// Read ~/.claude/.credentials.json. Write is deferred to the OAuth refresh
-// phase so we don't accidentally clobber the user's real credentials here.
+// Read/write ~/.claude/.credentials.json. Atomic write via tempfile+rename
+// so a crash mid-refresh never corrupts the user's auth state.
 
 use crate::{models::*, paths};
 
@@ -11,6 +11,17 @@ pub fn read_full() -> Option<CredentialsFile> {
 
 pub fn read_access_token() -> Option<String> {
     read_full()?.claude_ai_oauth?.access_token
+}
+
+pub fn write_atomic(creds: &CredentialsFile) -> std::io::Result<()> {
+    let path = paths::credentials();
+    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(creds)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
 }
 
 /// Friendly plan label for the tray tooltip / dashboard header. Mirrors the

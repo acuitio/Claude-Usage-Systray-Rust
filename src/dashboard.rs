@@ -16,6 +16,14 @@ pub unsafe fn is_open() -> bool {
     !HWND_DASH.is_null() && IsWindow(HWND_DASH) != 0
 }
 
+/// Force a repaint against the current cache. Called from the host
+/// window's WM_USAGE_UPDATED handler.
+pub unsafe fn on_data_changed() {
+    if is_open() {
+        InvalidateRect(HWND_DASH, std::ptr::null(), 0);
+    }
+}
+
 pub unsafe fn open(_owner: HWND) {
     if is_open() {
         SetForegroundWindow(HWND_DASH);
