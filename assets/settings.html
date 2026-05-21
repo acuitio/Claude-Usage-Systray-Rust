@@ -256,7 +256,7 @@
       <button id="btn-saveexit" class="primary">Save &amp; Exit</button>
     </div>
   </div>
-  <div id="status-bar" style="padding:6px 22px; background:#1e1e1e; border-top:1px solid #333; font-size:11px; color:#888; min-height:18px">Loading…</div>
+  <div id="status-bar" style="padding:6px 22px; background:#1e1e1e; border-top:1px solid #333; font-size:11px; color:#888; min-height:18px"></div>
 </div>
 
 <script>
@@ -331,7 +331,6 @@
   // Bind via addEventListener (inline onclick can be blocked by WebView2's
   // default CSP).
   document.addEventListener('DOMContentLoaded', () => {
-    setStatus('DOM ready. window.chrome.webview = ' + (window.chrome && window.chrome.webview ? 'OK' : 'MISSING'));
     document.getElementById('btn-apply').addEventListener('click', apply);
     document.getElementById('btn-saveexit').addEventListener('click', saveAndExit);
     document.getElementById('btn-cancel').addEventListener('click', cancel);
