@@ -1,6 +1,15 @@
 // Settings dialog — wired to config_store. Loads config.json on open,
 // writes it back atomically on Apply. Schema identical to the C# version
 // (src/Shared/Models.cs) so config files are swappable between ports.
+//
+// Layout sections (top→bottom):
+//   General      — 4 checkboxes (startup, on-top, bg-collect, auto-refresh)
+//   Display      — display mode combo, overlay opacity, display scale
+//   Refresh      — poll interval, refresh display mode combo
+//   Overlay      — overlay format edit
+//   Display Opts — 5 show-* checkboxes + font family combo
+//   Colors       — bg, text, sufficient, partial, depleted (5 picker buttons)
+//   Buttons      — Reset / Cancel / Apply / Save & Exit
 
 use std::ptr::null_mut;
 use windows_sys::w;
@@ -14,26 +23,63 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::common::*;
 use crate::{config_store, models::AppConfig};
 
+// ─── Statics ──────────────────────────────────────────────────────────
 static mut HWND_SETTINGS: HWND = null_mut();
-static mut HWND_BG_BTN: HWND = null_mut();
-static mut HWND_TEXT_BTN: HWND = null_mut();
-static mut BG_COLOR: u32 = 0x002e_1e1e;
-static mut TEXT_COLOR: u32 = 0x00ff_ffff;
 
-const ID_CB_STARTUP: u16       = 7100;
-const ID_CB_ONTOP: u16         = 7101;
-const ID_CB_BACKGROUND: u16    = 7102;
-const ID_CB_AUTOREFRESH: u16   = 7103;
-const ID_COMBO_MODE: u16       = 7104;
-const ID_EDIT_POLLSEC: u16     = 7105;
-const ID_UD_POLLSEC: u16       = 7106;
-const ID_EDIT_OVERLAYFMT: u16  = 7107;
-const ID_BTN_BG_COLOR: u16     = 7108;
-const ID_BTN_TEXT_COLOR: u16   = 7109;
-const ID_BTN_APPLY: u16        = 7110;
-const ID_BTN_SAVEEXIT: u16     = 7111;
-const ID_BTN_RESET: u16        = 7112;
-const ID_BTN_CANCEL: u16       = 7113;
+// Color picker buttons need HWND tracked so we can update their label.
+static mut HWND_BG_BTN:   HWND = null_mut();
+static mut HWND_TEXT_BTN: HWND = null_mut();
+static mut HWND_SUF_BTN:  HWND = null_mut();
+static mut HWND_PART_BTN: HWND = null_mut();
+static mut HWND_DEPL_BTN: HWND = null_mut();
+
+// Live colors in COLORREF form for the dialog session. populate_from_config
+// seeds them from disk; the picker updates them; collect_into_config writes
+// them back to the AppConfig.
+static mut BG_COLOR:   u32 = 0x002e_1e1e;
+static mut TEXT_COLOR: u32 = 0x00ff_ffff;
+static mut SUF_COLOR:  u32 = 0x0064_c864;
+static mut PART_COLOR: u32 = 0x0032_c8e6;
+static mut DEPL_COLOR: u32 = 0x0050_50e6;
+
+// ─── Control IDs ──────────────────────────────────────────────────────
+const ID_CB_STARTUP: u16          = 7100;
+const ID_CB_ONTOP: u16            = 7101;
+const ID_CB_BACKGROUND: u16       = 7102;
+const ID_CB_AUTOREFRESH: u16      = 7103;
+const ID_COMBO_MODE: u16          = 7104;
+const ID_EDIT_POLLSEC: u16        = 7105;
+const ID_UD_POLLSEC: u16          = 7106;
+const ID_EDIT_OVERLAYFMT: u16     = 7107;
+const ID_BTN_BG_COLOR: u16        = 7108;
+const ID_BTN_TEXT_COLOR: u16      = 7109;
+const ID_BTN_APPLY: u16           = 7110;
+const ID_BTN_SAVEEXIT: u16        = 7111;
+const ID_BTN_RESET: u16           = 7112;
+const ID_BTN_CANCEL: u16          = 7113;
+const ID_EDIT_OPACITY: u16        = 7114;
+const ID_UD_OPACITY: u16          = 7115;
+const ID_EDIT_SCALE: u16          = 7116;
+const ID_UD_SCALE: u16            = 7117;
+const ID_COMBO_REFRESH_MODE: u16  = 7118;
+const ID_COMBO_FONT: u16          = 7119;
+const ID_CB_SHOW_SESSION: u16     = 7120;
+const ID_CB_SHOW_WEEKLY: u16      = 7121;
+const ID_CB_SHOW_SONNET: u16      = 7122;
+const ID_CB_SHOW_DEPLETION: u16   = 7123;
+const ID_CB_SHOW_LAST_REFRESH: u16= 7124;
+const ID_BTN_SUF_COLOR: u16       = 7125;
+const ID_BTN_PART_COLOR: u16      = 7126;
+const ID_BTN_DEPL_COLOR: u16      = 7127;
+
+// ─── Font family choices ──────────────────────────────────────────────
+// Same set as the C# SettingsForm.cs.
+const FONT_FAMILIES: &[&str] = &[
+    "Segoe UI", "Segoe UI Variable", "Bahnschrift", "Cascadia Mono",
+    "Calibri", "Tahoma", "Verdana", "Arial", "Consolas", "Cambria",
+];
+
+// ─── Open / build ─────────────────────────────────────────────────────
 
 pub unsafe fn open(_owner: HWND) {
     if !HWND_SETTINGS.is_null() && IsWindow(HWND_SETTINGS) != 0 {
@@ -58,13 +104,12 @@ pub unsafe fn open(_owner: HWND) {
     };
     RegisterClassExW(&wc);
 
-    // WS_VISIBLE in the initial style + SetWindowPos avoids the same
-    // "shown-but-never-paints" race we hit on the dashboard window when
-    // open() is called from inside the tray-menu message handler.
+    // Sized to fit all sections without scrolling on typical laptop screens.
+    // Sizable border lets users resize/maximize if they need to.
     HWND_SETTINGS = CreateWindowExW(
         0, class_name, w!("Settings"),
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 600, 760,
+        CW_USEDEFAULT, CW_USEDEFAULT, 620, 1100,
         null_mut(), null_mut(), instance, std::ptr::null(),
     );
     SetWindowPos(HWND_SETTINGS, HWND_TOP, 0, 0, 0, 0,
@@ -74,7 +119,7 @@ pub unsafe fn open(_owner: HWND) {
 }
 
 unsafe fn build_controls(parent: HWND) {
-    let (x, mut y, w) = (24, 18, 540);
+    let (x, mut y, w) = (24, 18, 560);
 
     macro_rules! header {
         ($t:expr) => {{
@@ -91,23 +136,34 @@ unsafe fn build_controls(parent: HWND) {
             y += 14;
         }};
     }
-
-    header!("General");
-    for (label, id) in [
-        (w!("Launch widget on Windows startup"),                       ID_CB_STARTUP),
-        (w!("Dashboard always on top"),                                ID_CB_ONTOP),
-        (w!("Collect usage data in the background (every 10 min)"),    ID_CB_BACKGROUND),
-        (w!("Auto-refresh OAuth token (Path 1)"),                      ID_CB_AUTOREFRESH),
-    ] {
-        let cb = create_child(parent, w!("BUTTON"), label,
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX as u32,
-            x, y, w, 22, id);
-        set_font(cb, FONT_REG);
-        y += 26;
+    macro_rules! checkbox {
+        ($label:expr, $id:expr) => {{
+            let cb = create_child(parent, w!("BUTTON"), w!($label),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+                x, y, w, 22, $id);
+            set_font(cb, FONT_REG);
+            y += 26;
+        }};
     }
+    macro_rules! sublabel {
+        ($t:expr) => {{
+            let h = create_child(parent, w!("STATIC"), w!($t),
+                WS_CHILD | WS_VISIBLE, x, y, w, 18, 0);
+            set_font(h, FONT_REG);
+            y += 22;
+        }};
+    }
+
+    // ── General ──
+    header!("General");
+    checkbox!("Launch widget on Windows startup",                    ID_CB_STARTUP);
+    checkbox!("Dashboard always on top",                             ID_CB_ONTOP);
+    checkbox!("Collect usage data in the background (every 10 min)", ID_CB_BACKGROUND);
+    checkbox!("Auto-refresh OAuth token (Path 1)",                   ID_CB_AUTOREFRESH);
     y += 4;
     sep!();
 
+    // ── Display Mode ──
     header!("Display Mode");
     let combo = create_child(parent, w!("COMBOBOX"), std::ptr::null(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL
@@ -117,22 +173,34 @@ unsafe fn build_controls(parent: HWND) {
     SendMessageW(combo, CB_ADDSTRING, 0, w!("overlay") as LPARAM);
     set_font(combo, FONT_REG);
     y += 36;
+
+    sublabel!("Overlay opacity (0-100)");
+    spinner(parent, ID_EDIT_OPACITY, ID_UD_OPACITY, 0, 100, x, y);
+    y += 32;
+
+    sublabel!("Display scale (1-400)");
+    spinner(parent, ID_EDIT_SCALE, ID_UD_SCALE, 1, 400, x, y);
+    y += 32;
     sep!();
 
-    header!("Refresh interval (seconds, 1-1800)");
-    let edit = create_child(parent, w!("EDIT"), w!(""),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER
-            | ES_NUMBER as u32 | ES_LEFT as u32,
-        x, y, 80, 26, ID_EDIT_POLLSEC);
-    set_font(edit, FONT_REG);
-    let ud = create_child(parent, UPDOWN_CLASSW, std::ptr::null(),
-        WS_CHILD | WS_VISIBLE | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
-        0, 0, 0, 0, ID_UD_POLLSEC);
-    SendMessageW(ud, UDM_SETBUDDY, edit as WPARAM, 0);
-    SendMessageW(ud, UDM_SETRANGE32, 1, 1800);
+    // ── Refresh ──
+    header!("Refresh");
+    sublabel!("Interval (seconds, 1-1800)");
+    spinner(parent, ID_EDIT_POLLSEC, ID_UD_POLLSEC, 1, 1800, x, y);
+    y += 32;
+
+    sublabel!("Display mode (exact vs approximate)");
+    let combo = create_child(parent, w!("COMBOBOX"), std::ptr::null(),
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL
+            | CBS_DROPDOWNLIST as u32 | CBS_HASSTRINGS as u32,
+        x, y, 220, 200, ID_COMBO_REFRESH_MODE);
+    SendMessageW(combo, CB_ADDSTRING, 0, w!("exact") as LPARAM);
+    SendMessageW(combo, CB_ADDSTRING, 0, w!("approximate") as LPARAM);
+    set_font(combo, FONT_REG);
     y += 36;
     sep!();
 
+    // ── Overlay format ──
     header!("Overlay format");
     let fmt = create_child(parent, w!("EDIT"), w!(""),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER
@@ -142,13 +210,38 @@ unsafe fn build_controls(parent: HWND) {
     y += 36;
     sep!();
 
+    // ── Display Options ──
+    header!("Display Options");
+    checkbox!("Show Session (5-hour)",                       ID_CB_SHOW_SESSION);
+    checkbox!("Show Weekly (All Models)",                    ID_CB_SHOW_WEEKLY);
+    checkbox!("Show Weekly (Sonnet)",                        ID_CB_SHOW_SONNET);
+    checkbox!("Show depletion estimates under each bar",     ID_CB_SHOW_DEPLETION);
+    checkbox!("Display \"Time since last refresh\"",         ID_CB_SHOW_LAST_REFRESH);
+
+    sublabel!("Font family");
+    let font_combo = create_child(parent, w!("COMBOBOX"), std::ptr::null(),
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL
+            | CBS_DROPDOWNLIST as u32 | CBS_HASSTRINGS as u32,
+        x, y, 260, 240, ID_COMBO_FONT);
+    set_font(font_combo, FONT_REG);
+    for family in FONT_FAMILIES {
+        let s = wstr(family);
+        SendMessageW(font_combo, CB_ADDSTRING, 0, s.as_ptr() as LPARAM);
+    }
+    y += 36;
+    sep!();
+
+    // ── Colors ──
     header!("Colors");
     for (label, id, hwnd_slot) in [
-        (w!("Background"), ID_BTN_BG_COLOR,   &raw mut HWND_BG_BTN),
-        (w!("Text"),       ID_BTN_TEXT_COLOR, &raw mut HWND_TEXT_BTN),
+        (w!("Background"),       ID_BTN_BG_COLOR,   &raw mut HWND_BG_BTN),
+        (w!("Text"),             ID_BTN_TEXT_COLOR, &raw mut HWND_TEXT_BTN),
+        (w!("Sufficient (<50%)"),ID_BTN_SUF_COLOR,  &raw mut HWND_SUF_BTN),
+        (w!("Partial (50-90%)"), ID_BTN_PART_COLOR, &raw mut HWND_PART_BTN),
+        (w!("Depleted (>=90%)"), ID_BTN_DEPL_COLOR, &raw mut HWND_DEPL_BTN),
     ] {
         let lbl = create_child(parent, w!("STATIC"), label,
-            WS_CHILD | WS_VISIBLE, x, y + 6, 150, 22, 0);
+            WS_CHILD | WS_VISIBLE, x, y + 6, 200, 22, 0);
         set_font(lbl, FONT_REG);
         let btn = create_child(parent, w!("BUTTON"), w!(""),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
@@ -159,7 +252,7 @@ unsafe fn build_controls(parent: HWND) {
     }
     sep!();
 
-    // Button row
+    // ── Buttons ──
     let by = y + 10;
     for (label, id, bx, bw, def) in [
         (w!("Reset to Defaults"), ID_BTN_RESET,    x,            150, false),
@@ -174,48 +267,104 @@ unsafe fn build_controls(parent: HWND) {
     }
 }
 
+unsafe fn spinner(parent: HWND, edit_id: u16, ud_id: u16, lo: i32, hi: i32, x: i32, y: i32) {
+    let edit = create_child(parent, w!("EDIT"), w!(""),
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER
+            | ES_NUMBER as u32 | ES_LEFT as u32,
+        x, y, 80, 26, edit_id);
+    set_font(edit, FONT_REG);
+    let ud = create_child(parent, UPDOWN_CLASSW, std::ptr::null(),
+        WS_CHILD | WS_VISIBLE | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
+        0, 0, 0, 0, ud_id);
+    SendMessageW(ud, UDM_SETBUDDY, edit as WPARAM, 0);
+    SendMessageW(ud, UDM_SETRANGE32, lo as WPARAM, hi as LPARAM);
+}
+
 // ─── Config ↔ controls ──────────────────────────────────────────────
 
 unsafe fn populate_from_config(parent: HWND, cfg: &AppConfig) {
-    set_check(parent, ID_CB_STARTUP,     cfg.start_on_startup);
-    set_check(parent, ID_CB_ONTOP,       cfg.dashboard_on_top);
-    set_check(parent, ID_CB_BACKGROUND,  cfg.background_collection);
-    set_check(parent, ID_CB_AUTOREFRESH, cfg.auto_refresh_token);
+    set_check(parent, ID_CB_STARTUP,           cfg.start_on_startup);
+    set_check(parent, ID_CB_ONTOP,             cfg.dashboard_on_top);
+    set_check(parent, ID_CB_BACKGROUND,        cfg.background_collection);
+    set_check(parent, ID_CB_AUTOREFRESH,       cfg.auto_refresh_token);
+    set_check(parent, ID_CB_SHOW_SESSION,      cfg.show_session);
+    set_check(parent, ID_CB_SHOW_WEEKLY,       cfg.show_weekly);
+    set_check(parent, ID_CB_SHOW_SONNET,       cfg.show_sonnet);
+    set_check(parent, ID_CB_SHOW_DEPLETION,    cfg.show_depletion_estimates);
+    set_check(parent, ID_CB_SHOW_LAST_REFRESH, cfg.show_last_refresh);
 
+    // Display mode combo
     let combo = GetDlgItem(parent, ID_COMBO_MODE as i32);
-    let idx = if cfg.display_mode == "overlay" { 1 } else { 0 };
+    SendMessageW(combo, CB_SETCURSEL,
+        if cfg.display_mode == "overlay" { 1 } else { 0 } as WPARAM, 0);
+
+    // Refresh display mode combo
+    let combo = GetDlgItem(parent, ID_COMBO_REFRESH_MODE as i32);
+    SendMessageW(combo, CB_SETCURSEL,
+        if cfg.refresh_display_mode == "approximate" { 1 } else { 0 } as WPARAM, 0);
+
+    // Font combo
+    let combo = GetDlgItem(parent, ID_COMBO_FONT as i32);
+    let idx = FONT_FAMILIES.iter().position(|f| *f == cfg.font_family).unwrap_or(0) as i32;
     SendMessageW(combo, CB_SETCURSEL, idx as WPARAM, 0);
 
-    let ud = GetDlgItem(parent, ID_UD_POLLSEC as i32);
-    SendMessageW(ud, UDM_SETPOS32, 0, cfg.poll_interval_sec as LPARAM);
+    // Numeric spinners
+    set_spinner(parent, ID_UD_POLLSEC, cfg.poll_interval_sec);
+    set_spinner(parent, ID_UD_OPACITY, cfg.overlay_opacity);
+    set_spinner(parent, ID_UD_SCALE,   cfg.scale_pct);
 
     set_edit_text(parent, ID_EDIT_OVERLAYFMT, &cfg.overlay_format);
 
+    // Color buttons
     BG_COLOR   = hex_to_colorref(&cfg.bg_color).unwrap_or(0x002e_1e1e);
     TEXT_COLOR = hex_to_colorref(&cfg.color_text).unwrap_or(0x00ff_ffff);
+    SUF_COLOR  = hex_to_colorref(&cfg.color_sufficient).unwrap_or(0x0064_c864);
+    PART_COLOR = hex_to_colorref(&cfg.color_partial).unwrap_or(0x0032_c8e6);
+    DEPL_COLOR = hex_to_colorref(&cfg.color_depleted).unwrap_or(0x0050_50e6);
     SetWindowTextW(HWND_BG_BTN,   color_hex(BG_COLOR).as_ptr());
     SetWindowTextW(HWND_TEXT_BTN, color_hex(TEXT_COLOR).as_ptr());
+    SetWindowTextW(HWND_SUF_BTN,  color_hex(SUF_COLOR).as_ptr());
+    SetWindowTextW(HWND_PART_BTN, color_hex(PART_COLOR).as_ptr());
+    SetWindowTextW(HWND_DEPL_BTN, color_hex(DEPL_COLOR).as_ptr());
 }
 
 unsafe fn collect_into_config(parent: HWND, cfg: &mut AppConfig) {
-    cfg.start_on_startup       = get_check(parent, ID_CB_STARTUP);
-    cfg.dashboard_on_top       = get_check(parent, ID_CB_ONTOP);
-    cfg.background_collection  = get_check(parent, ID_CB_BACKGROUND);
-    cfg.auto_refresh_token     = get_check(parent, ID_CB_AUTOREFRESH);
+    cfg.start_on_startup         = get_check(parent, ID_CB_STARTUP);
+    cfg.dashboard_on_top         = get_check(parent, ID_CB_ONTOP);
+    cfg.background_collection    = get_check(parent, ID_CB_BACKGROUND);
+    cfg.auto_refresh_token       = get_check(parent, ID_CB_AUTOREFRESH);
+    cfg.show_session             = get_check(parent, ID_CB_SHOW_SESSION);
+    cfg.show_weekly              = get_check(parent, ID_CB_SHOW_WEEKLY);
+    cfg.show_sonnet              = get_check(parent, ID_CB_SHOW_SONNET);
+    cfg.show_depletion_estimates = get_check(parent, ID_CB_SHOW_DEPLETION);
+    cfg.show_last_refresh        = get_check(parent, ID_CB_SHOW_LAST_REFRESH);
 
     let combo = GetDlgItem(parent, ID_COMBO_MODE as i32);
     let idx = SendMessageW(combo, CB_GETCURSEL, 0, 0) as i32;
     cfg.display_mode = if idx == 1 { "overlay".into() } else { "tray".into() };
 
-    let ud = GetDlgItem(parent, ID_UD_POLLSEC as i32);
-    let pos = SendMessageW(ud, UDM_GETPOS32, 0, 0) as i32;
-    cfg.poll_interval_sec = pos.clamp(1, 1800);
+    let combo = GetDlgItem(parent, ID_COMBO_REFRESH_MODE as i32);
+    let idx = SendMessageW(combo, CB_GETCURSEL, 0, 0) as i32;
+    cfg.refresh_display_mode = if idx == 1 { "approximate".into() } else { "exact".into() };
+
+    let combo = GetDlgItem(parent, ID_COMBO_FONT as i32);
+    let idx = SendMessageW(combo, CB_GETCURSEL, 0, 0) as i32;
+    if idx >= 0 && (idx as usize) < FONT_FAMILIES.len() {
+        cfg.font_family = FONT_FAMILIES[idx as usize].into();
+    }
+
+    cfg.poll_interval_sec = get_spinner(parent, ID_UD_POLLSEC).clamp(1, 1800);
+    cfg.overlay_opacity   = get_spinner(parent, ID_UD_OPACITY).clamp(0, 100);
+    cfg.scale_pct         = get_spinner(parent, ID_UD_SCALE).clamp(1, 400);
 
     cfg.overlay_format = get_edit_text(parent, ID_EDIT_OVERLAYFMT)
         .unwrap_or_else(|| cfg.overlay_format.clone());
 
-    cfg.bg_color   = colorref_to_hex(BG_COLOR);
-    cfg.color_text = colorref_to_hex(TEXT_COLOR);
+    cfg.bg_color         = colorref_to_hex(BG_COLOR);
+    cfg.color_text       = colorref_to_hex(TEXT_COLOR);
+    cfg.color_sufficient = colorref_to_hex(SUF_COLOR);
+    cfg.color_partial    = colorref_to_hex(PART_COLOR);
+    cfg.color_depleted   = colorref_to_hex(DEPL_COLOR);
 }
 
 unsafe fn set_check(parent: HWND, id: u16, on: bool) {
@@ -243,6 +392,16 @@ unsafe fn get_edit_text(parent: HWND, id: u16) -> Option<String> {
     let copied = GetWindowTextW(h, buf.as_mut_ptr(), buf.len() as i32);
     buf.truncate(copied as usize);
     Some(String::from_utf16_lossy(&buf))
+}
+
+unsafe fn set_spinner(parent: HWND, ud_id: u16, value: i32) {
+    let h = GetDlgItem(parent, ud_id as i32);
+    SendMessageW(h, UDM_SETPOS32, 0, value as LPARAM);
+}
+
+unsafe fn get_spinner(parent: HWND, ud_id: u16) -> i32 {
+    let h = GetDlgItem(parent, ud_id as i32);
+    SendMessageW(h, UDM_GETPOS32, 0, 0) as i32
 }
 
 // ─── Color hex (#RRGGBB) ↔ COLORREF (0x00BBGGRR) ───────────────────
@@ -322,16 +481,13 @@ unsafe fn handle_command(hwnd: HWND, wp: WPARAM) {
             }
         }
         ID_BTN_CANCEL => { PostMessageW(hwnd, WM_CLOSE, 0, 0); }
-        ID_BTN_BG_COLOR => {
-            if pick_color(hwnd, &mut BG_COLOR) {
-                SetWindowTextW(HWND_BG_BTN, color_hex(BG_COLOR).as_ptr());
-            }
-        }
-        ID_BTN_TEXT_COLOR => {
-            if pick_color(hwnd, &mut TEXT_COLOR) {
-                SetWindowTextW(HWND_TEXT_BTN, color_hex(TEXT_COLOR).as_ptr());
-            }
-        }
+
+        ID_BTN_BG_COLOR   => if pick_color(hwnd, &mut BG_COLOR)   { SetWindowTextW(HWND_BG_BTN,   color_hex(BG_COLOR).as_ptr()); }
+        ID_BTN_TEXT_COLOR => if pick_color(hwnd, &mut TEXT_COLOR) { SetWindowTextW(HWND_TEXT_BTN, color_hex(TEXT_COLOR).as_ptr()); }
+        ID_BTN_SUF_COLOR  => if pick_color(hwnd, &mut SUF_COLOR)  { SetWindowTextW(HWND_SUF_BTN,  color_hex(SUF_COLOR).as_ptr()); }
+        ID_BTN_PART_COLOR => if pick_color(hwnd, &mut PART_COLOR) { SetWindowTextW(HWND_PART_BTN, color_hex(PART_COLOR).as_ptr()); }
+        ID_BTN_DEPL_COLOR => if pick_color(hwnd, &mut DEPL_COLOR) { SetWindowTextW(HWND_DEPL_BTN, color_hex(DEPL_COLOR).as_ptr()); }
+
         _ => {}
     }
 }
