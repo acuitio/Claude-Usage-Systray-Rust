@@ -528,16 +528,26 @@ fn lparam_to_point(lp: LPARAM) -> POINT {
     }
 }
 
-/// Make sure `(x, y)` lands inside the virtual screen (union of all monitors)
-/// with at least `MIN_VISIBLE` pixels of the window's edge poking into a real
-/// display, so the user can always grab and drag it back.
+/// Make sure `(x, y)` lands fully inside the *work area* of whichever
+/// monitor it's closest to. Work area excludes the taskbar, so an overlay
+/// at the bottom edge of the virtual screen doesn't end up obscured by it.
 unsafe fn clamp_to_virtual_screen(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
-    const MIN_VISIBLE: i32 = 40;
-    let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    let cx = x.clamp(vx + MIN_VISIBLE - w, vx + vw - MIN_VISIBLE);
-    let cy = y.clamp(vy, vy + vh - MIN_VISIBLE);
-    (cx, cy)
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+    };
+    let pt = POINT { x: x + w / 2, y: y + h / 2 };
+    let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+    let mut mi: MONITORINFO = std::mem::zeroed();
+    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    let wa = if GetMonitorInfoW(monitor, &mut mi) != 0 {
+        mi.rcWork
+    } else {
+        // Fallback: primary work area via SPI.
+        let mut r: RECT = std::mem::zeroed();
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut r as *mut _ as *mut _, 0);
+        r
+    };
+    let max_x = (wa.right - w).max(wa.left);
+    let max_y = (wa.bottom - h).max(wa.top);
+    (x.clamp(wa.left, max_x), y.clamp(wa.top, max_y))
 }
