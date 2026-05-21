@@ -16,7 +16,9 @@ What's implemented:
 - Dashboard window — real plan + cache age + three usage bars with
   per-bar reset times derived from ISO timestamps.
 - Overlay — layered window, per-pixel alpha, drag-to-move, position
-  persisted to `config.json`.
+  persisted to `config.json`, two-pass drop shadow (wide glow + tight
+  core via the GDI+ Blur effect) for legibility against translucent
+  backdrops.
 - Settings — every `AppConfig` field, including the 5 colour pickers,
   font family combo, opacity/scale spinners, refresh-mode combo, and
   all `show_*` checkboxes. Atomic write on Apply.
@@ -70,10 +72,6 @@ src/
   identity. Fix needs `IPropertyStore` + `SHGetPropertyStoreForWindow`
   COM interop, which is rough in `windows-sys` without the typed
   wrappers. Cosmetic.
-- **Overlay rendering quality.** Pure GDI text on a per-pixel-alpha
-  bitmap aliases against the translucent background. The C# port has
-  the same limitation; the Python original uses a two-pass shadow
-  pipeline that hasn't been ported to either.
 - **No scrollable Settings.** Dialog is sized to fit everything on
   typical screens (~1100 px tall) and is sizable/maximizable. If your
   display is shorter, drag the dialog to access the lower controls.
