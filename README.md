@@ -27,8 +27,6 @@ What's implemented:
   with cache-first / cooldown-aware / retry-with-backoff against the
   same `api.anthropic.com/api/oauth/usage` endpoint as the C# port.
 - Background polling thread + `PostMessage(WM_USAGE_UPDATED)` ↔ UI.
-- Headless `ClaudeUsageCollector.exe` second binary, spawned from the
-  tray app when `background_collection` is enabled.
 - `WM_DPICHANGED` handler for moves between monitors.
 - Windows 11 Settings → Other system tray icons self-patch (registry).
 - Startup-on-login via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
@@ -82,10 +80,16 @@ src/
 
 ## Build numbers (release, AOT-equivalent)
 
-- `ClaudeUsageSystray.exe`: **1.51 MB**
-- `ClaudeUsageCollector.exe`: **1.38 MB**
-- Total source: 2,512 LOC across 20 files
+- `ClaudeUsageSystray.exe`: **~1.5 MB** (single binary; no .NET runtime
+  required on the target)
 - Runtime RAM (tray app idle): ~13 MB
+
+Note: the C# port ships a separate `ClaudeUsageCollector.exe` for
+headless polling when the tray isn't running. The Rust port skips it
+intentionally — the tray app polls on its own timer when it's up, and
+since startup-on-login is wired, "tray is up" is the steady state.
+The `background_collection` field stays in `AppConfig` for compatibility
+with the C# version's `config.json` but has no effect.
 
 ## License
 

@@ -156,10 +156,9 @@ unsafe fn build_controls(parent: HWND) {
 
     // ── General ──
     header!("General");
-    checkbox!("Launch widget on Windows startup",                    ID_CB_STARTUP);
-    checkbox!("Dashboard always on top",                             ID_CB_ONTOP);
-    checkbox!("Collect usage data in the background (every 10 min)", ID_CB_BACKGROUND);
-    checkbox!("Auto-refresh OAuth token (Path 1)",                   ID_CB_AUTOREFRESH);
+    checkbox!("Launch widget on Windows startup", ID_CB_STARTUP);
+    checkbox!("Dashboard always on top",          ID_CB_ONTOP);
+    checkbox!("Auto-refresh OAuth token (Path 1)", ID_CB_AUTOREFRESH);
     y += 4;
     sep!();
 
@@ -285,7 +284,6 @@ unsafe fn spinner(parent: HWND, edit_id: u16, ud_id: u16, lo: i32, hi: i32, x: i
 unsafe fn populate_from_config(parent: HWND, cfg: &AppConfig) {
     set_check(parent, ID_CB_STARTUP,           cfg.start_on_startup);
     set_check(parent, ID_CB_ONTOP,             cfg.dashboard_on_top);
-    set_check(parent, ID_CB_BACKGROUND,        cfg.background_collection);
     set_check(parent, ID_CB_AUTOREFRESH,       cfg.auto_refresh_token);
     set_check(parent, ID_CB_SHOW_SESSION,      cfg.show_session);
     set_check(parent, ID_CB_SHOW_WEEKLY,       cfg.show_weekly);
@@ -331,7 +329,6 @@ unsafe fn populate_from_config(parent: HWND, cfg: &AppConfig) {
 unsafe fn collect_into_config(parent: HWND, cfg: &mut AppConfig) {
     cfg.start_on_startup         = get_check(parent, ID_CB_STARTUP);
     cfg.dashboard_on_top         = get_check(parent, ID_CB_ONTOP);
-    cfg.background_collection    = get_check(parent, ID_CB_BACKGROUND);
     cfg.auto_refresh_token       = get_check(parent, ID_CB_AUTOREFRESH);
     cfg.show_session             = get_check(parent, ID_CB_SHOW_SESSION);
     cfg.show_weekly              = get_check(parent, ID_CB_SHOW_WEEKLY);
