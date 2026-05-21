@@ -240,7 +240,7 @@ unsafe fn render() {
     let text_color = hex_to_colorref(&cfg.color_text).unwrap_or(0x00ff_ffff);
     let mut tokens = build_tokens(&cfg.overlay_format, &cfg, &usage, text_color);
 
-    let div_w   = ((scale as i32) * 1).max(1);
+    let div_w   = (scale as i32).max(1);
     let div_gap = ((4.0 * scale) as i32).max(3);
 
     // ── GDI+ font + format setup (used for both measure and draw) ───────
@@ -378,11 +378,11 @@ unsafe fn render() {
         SourceConstantAlpha: 255,
         AlphaFormat:         AC_SRC_ALPHA as u8,
     };
-    let mut sz = SIZE { cx: width, cy: height };
-    let mut pt_src = POINT { x: 0, y: 0 };
-    let mut pt_dst = POINT { x: rc.left, y: rc.top };
+    let sz = SIZE { cx: width, cy: height };
+    let pt_src = POINT { x: 0, y: 0 };
+    let pt_dst = POINT { x: rc.left, y: rc.top };
     UpdateLayeredWindow(hwnd, hdc_screen,
-        &mut pt_dst, &mut sz, hdc_mem, &mut pt_src,
+        &pt_dst, &sz, hdc_mem, &pt_src,
         0, &blend, ULW_ALPHA);
 
     // ── Cleanup ─────────────────────────────────────────────────────────

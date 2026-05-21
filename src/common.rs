@@ -145,7 +145,7 @@ fn unix_from_ymdhm(y: i32, mo: u32, d: u32, h: u32, mn: u32) -> i64 {
     } else {
         [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     };
-    for m in 0..(mo as usize).saturating_sub(1).min(12) { days += mdays[m]; }
+    for d in &mdays[..(mo as usize).saturating_sub(1).min(12)] { days += *d as i64; }
     days += d as i64 - 1;
     days * 86_400 + (h as i64) * 3600 + (mn as i64) * 60
 }

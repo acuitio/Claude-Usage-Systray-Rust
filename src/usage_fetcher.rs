@@ -29,10 +29,8 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
 
     if !force {
         if let Some(cached) = usage_cache::load() {
-            if cached.age_seconds < cfg.poll_interval_sec as f64 {
-                if cached.data.is_some() {
-                    return FetchOutcome::CacheHit;
-                }
+            if cached.age_seconds < cfg.poll_interval_sec as f64 && cached.data.is_some() {
+                return FetchOutcome::CacheHit;
             }
         }
         let remain = cooldown::remaining_seconds();
