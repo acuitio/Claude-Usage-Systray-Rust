@@ -301,8 +301,13 @@ unsafe fn render() {
     let opacity = cfg.overlay_opacity.clamp(0, 100) as u32;
     let bg_a = (opacity * 255 / 100).max(1);
     let bg_col = hex_to_colorref(&cfg.bg_color).unwrap_or(0x002e_1e1e);
-    let bg_pixel_full   = nopremul_bgra(bg_col, 255);
+    let bg_pixel_full = nopremul_bgra(bg_col, 255);
     fill_bgra(bits, (width * height) as usize, bg_pixel_full);
+
+    // For finalize_alpha: the largest channel-distance any token's text
+    // colour can have from the bg. We use this to recover anti-aliased
+    // coverage from GDI's RGB-only output (see comment in finalize_alpha).
+    let max_text_dist = compute_max_text_dist(&tokens, bg_col);
 
     // Token pass — text & dividers.
     SetBkMode(hdc_mem, TRANSPARENT as i32);
@@ -330,15 +335,7 @@ unsafe fn render() {
         x += tok.width;
     }
 
-    // Reconcile alpha after GDI text drawing. GDI zeros the alpha byte of
-    // any pixel it writes on a 32bpp BI_RGB DIB (it treats the format as
-    // 24bpp + padding). So after the text pass, every text-affected pixel
-    // has alpha=0 — invisible on a layered window. Fix it up here:
-    //   - alpha < 255 → GDI touched it (text, dividers, AA fringes). Force
-    //     to fully opaque so it renders at full strength.
-    //   - alpha = 255 AND RGB matches the bg fill → untouched background;
-    //     apply the configured `bg_a` to make it translucent.
-    finalize_alpha(bits, (width * height) as usize, bg_pixel_full, bg_a);
+    finalize_alpha(bits, (width * height) as usize, bg_pixel_full, bg_a, max_text_dist);
 
     // Then premultiply RGB by alpha for ULW_ALPHA.
     premultiply_all(bits, (width * height) as usize);
@@ -417,24 +414,78 @@ unsafe fn premultiply_all(bits: *mut c_void, count: usize) {
     }
 }
 
-/// Walk every pixel, deciding its final alpha:
-///   - alpha < 255  → GDI wrote here (it zeroes the alpha byte on 32bpp
-///                    BI_RGB DIBs). Force to 255 so text/dividers render
-///                    fully opaque regardless of bg opacity.
-///   - alpha = 255 AND rgb = bg fill colour → background; assign `bg_a`.
-unsafe fn finalize_alpha(bits: *mut c_void, count: usize, bg_full_pixel: u32, bg_a: u32) {
+/// Reconcile alpha after GDI text drawing.
+///
+/// GDI zeros the alpha byte of any pixel it writes on a 32bpp BI_RGB DIB
+/// (it treats the format as 24bpp + padding). After the text pass:
+///   - pixels with alpha=255 are untouched background fill;
+///   - pixels with alpha=0 are GDI-drawn (text body, divider lines, and
+///     anti-aliased fringes at glyph edges).
+///
+/// GDI+ in the .NET port writes correct per-pixel alpha during text
+/// rendering, so AA fringe pixels there have intermediate alpha and blend
+/// smoothly. We approximate that by inferring "coverage" from the colour
+/// blend GDI left behind:
+///
+///     px = lerp(bg, text, cov)  ⟹  cov = |px - bg| / |text - bg|
+///
+/// Since multiple text colours coexist in one bitmap, we use the largest
+/// such distance across tokens (`max_text_dist`) as the normaliser. This
+/// is exact for the highest-contrast token and a small underestimate for
+/// lower-contrast ones — which only makes their fringes slightly more
+/// transparent, never less.
+///
+/// Final alpha per pixel:
+///   - untouched bg:   `bg_a` (so opacity affects bg only)
+///   - text/divider:   `lerp(bg_a, 255, cov)` — full opacity at core,
+///                     proportional partial opacity at AA edges.
+unsafe fn finalize_alpha(
+    bits: *mut c_void, count: usize,
+    bg_full_pixel: u32, bg_a: u32, max_text_dist: i32,
+) {
     let p = bits as *mut u32;
-    let bg_rgb = bg_full_pixel & 0x00ff_ffff;
+    let bg_b = (bg_full_pixel & 0xff)         as i32;
+    let bg_g = ((bg_full_pixel >> 8)  & 0xff) as i32;
+    let bg_r = ((bg_full_pixel >> 16) & 0xff) as i32;
+    let max_d = max_text_dist.max(1) as f64;
     for i in 0..count {
-        let px = *p.add(i);
-        let a = (px >> 24) & 0xff;
+        let px  = *p.add(i);
+        let a   = (px >> 24) & 0xff;
         let rgb = px & 0x00ff_ffff;
-        if a < 255 {
-            *p.add(i) = (255u32 << 24) | rgb;
-        } else if rgb == bg_rgb && bg_a < 255 {
-            *p.add(i) = (bg_a << 24) | bg_rgb;
+        if a == 255 {
+            // Untouched bg fill — apply the configured background opacity.
+            if bg_a < 255 {
+                *p.add(i) = (bg_a << 24) | rgb;
+            }
+        } else {
+            // GDI touched this pixel. Infer coverage from channel distance.
+            let pb = (px & 0xff)         as i32;
+            let pg = ((px >> 8)  & 0xff) as i32;
+            let pr = ((px >> 16) & 0xff) as i32;
+            let d = (pb - bg_b).abs().max((pg - bg_g).abs()).max((pr - bg_r).abs());
+            let cov  = (d as f64 / max_d).min(1.0);
+            let new_a = (bg_a as f64 + cov * (255.0 - bg_a as f64)) as u32;
+            *p.add(i) = (new_a << 24) | rgb;
         }
     }
+}
+
+/// Largest per-channel distance between any token's text colour and the
+/// background. Used by `finalize_alpha` to normalise AA coverage.
+fn compute_max_text_dist(tokens: &[OverlayToken], bg_col: u32) -> i32 {
+    // COLORREF is 0x00BBGGRR — R in low byte.
+    let bg_r = (bg_col & 0xff)         as i32;
+    let bg_g = ((bg_col >> 8)  & 0xff) as i32;
+    let bg_b = ((bg_col >> 16) & 0xff) as i32;
+    let mut max = 1i32;
+    for tok in tokens {
+        let tr = (tok.color & 0xff)         as i32;
+        let tg = ((tok.color >> 8)  & 0xff) as i32;
+        let tb = ((tok.color >> 16) & 0xff) as i32;
+        let d = (tr - bg_r).abs().max((tg - bg_g).abs()).max((tb - bg_b).abs());
+        max = max.max(d);
+    }
+    max
 }
 
 unsafe fn fill_bgra(bits: *mut c_void, count: usize, pixel: u32) {
