@@ -356,13 +356,19 @@ unsafe fn make_overlay_font(family: &str, em_size_px: i32, weight: i32) -> HFONT
     )
 }
 
-/// Non-premultiplied BGRA pixel. The DIB stores bytes in order B,G,R,A;
-/// our u32 layout is `(A << 24) | (B << 16) | (G << 8) | R` to match.
+/// Non-premultiplied BGRA pixel for the 32bpp BI_RGB DIB. Memory layout is
+/// B, G, R, A → byte 0 to byte 3. In a little-endian u32 that means B is in
+/// the LOW byte (bits 0..7), R is at bits 16..23.
+///
+/// COLORREF format (what hex_to_colorref returns) is `0x00BBGGRR` — R in
+/// the low byte. We have to flip R and B as we move from COLORREF into the
+/// DIB layout; getting this wrong shows up as everything being rendered
+/// with red and blue swapped.
 fn nopremul_bgra(colorref: u32, alpha: u32) -> u32 {
     let r = colorref & 0xff;
     let g = (colorref >> 8) & 0xff;
     let b = (colorref >> 16) & 0xff;
-    (alpha << 24) | (b << 16) | (g << 8) | r
+    (alpha << 24) | (r << 16) | (g << 8) | b
 }
 
 fn premul(component: u32, alpha: u32) -> u32 { component * alpha / 255 }
