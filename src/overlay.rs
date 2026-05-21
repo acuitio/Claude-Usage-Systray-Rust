@@ -275,10 +275,12 @@ unsafe fn render() {
 
     // Two-pass drop shadow: a tight CORE defines the letter shape, a wide
     // GLOW diffuses outward so the text integrates with the backdrop rather
-    // than looking pasted on. Constants mirror Python's _render_overlay_image.
+    // than looking pasted on. Dialed down vs Python's _render_overlay_image
+    // because GDI+'s Blur effect spreads farther per unit of `radius` than
+    // PIL's GaussianBlur, so the same numerical radii looked embossed.
     let shadow_dy        = (scale * 1.0).max(1.0);
-    let shadow_core_blur = (scale * 1.5).max(1.5);
-    let shadow_glow_blur = (scale * 5.0).max(4.0);
+    let shadow_core_blur = (scale * 1.0).max(1.0);
+    let shadow_glow_blur = (scale * 2.0).max(2.0);
     // Grow the bitmap so the widest blurred shadow can spread below the text
     // without being clipped.
     content_h += shadow_dy as i32 + shadow_glow_blur as i32 + 1;
@@ -358,8 +360,8 @@ unsafe fn render() {
     // Dividers are intentionally not shadowed — they're thin lines that
     // would just blur into smudges.
     const SHADOW_DX:           f32 = 0.0;
-    const SHADOW_GLOW_FACTOR:  f32 = 0.35;
-    const SHADOW_CORE_FACTOR:  f32 = 0.70;
+    const SHADOW_GLOW_FACTOR:  f32 = 0.15;
+    const SHADOW_CORE_FACTOR:  f32 = 0.30;
     let y_base = pad_y + 1;
     apply_shadow_layer(
         hdc_screen, width, height, &tokens, pad_x, y_base,
