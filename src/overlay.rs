@@ -499,17 +499,26 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             }
             WM_TIMER => {
                 if wp == TIMER_TOPMOST {
-                    // Only re-assert if we've actually slipped — otherwise
-                    // SetWindowPos every 500ms can show as a tiny flicker
-                    // when another window briefly has focus.
-                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                    if (ex & WS_EX_TOPMOST) == 0 {
-                        SetWindowPos(hwnd, HWND_TOPMOST,
-                            0, 0, 0, 0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                    }
+                    // The conditional WS_EX_TOPMOST check turned out to skip
+                    // the case that actually mattered — the taskbar can paint
+                    // over us without clearing our flag. Re-assert
+                    // unconditionally (without SWP_SHOWWINDOW so we don't
+                    // trigger a redraw flash).
+                    SetWindowPos(hwnd, HWND_TOPMOST,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 }
                 0
+            }
+            WM_WINDOWPOSCHANGING => {
+                // Intercept any z-order change and force ourselves back to
+                // the topmost slot. This catches transitions the timer might
+                // otherwise miss.
+                let pos = lp as *mut WINDOWPOS;
+                if !pos.is_null() && ((*pos).flags & SWP_NOZORDER) == 0 {
+                    (*pos).hwndInsertAfter = HWND_TOPMOST;
+                }
+                DefWindowProcW(hwnd, msg, wp, lp)
             }
             WM_DESTROY => {
                 KillTimer(hwnd, TIMER_TOPMOST);
