@@ -151,9 +151,23 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
     };
     let old_cfg = config_store::load();
 
+    // The form doesn't edit overlay drag position or the legacy
+    // background_collection fields. Replacing the whole AppConfig on Apply
+    // would wipe them. Merge: take the form fields from `new_cfg`, keep the
+    // non-form fields from `old_cfg`.
+    let merged = AppConfig {
+        widget_x:               old_cfg.widget_x,
+        widget_y:               old_cfg.widget_y,
+        widget_w:               old_cfg.widget_w,
+        widget_h:               old_cfg.widget_h,
+        background_collection:  old_cfg.background_collection,
+        collector_interval_sec: old_cfg.collector_interval_sec,
+        ..new_cfg
+    };
+
     // Sync the HKCU Run key if startup-on-login toggle changed.
-    if new_cfg.start_on_startup != old_cfg.start_on_startup {
-        if new_cfg.start_on_startup {
+    if merged.start_on_startup != old_cfg.start_on_startup {
+        if merged.start_on_startup {
             if let Ok(exe) = std::env::current_exe() {
                 crate::startup_registry::set_enabled(Some(&exe.to_string_lossy()));
             }
@@ -162,10 +176,13 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
         }
     }
 
-    if let Err(e) = config_store::save(&new_cfg) {
+    if let Err(e) = config_store::save(&merged) {
         eprintln!("settings: save failed: {e}");
         return;
     }
+
+    eprintln!("settings: applied — scale_pct={}, overlay_opacity={}, font_family={}",
+        merged.scale_pct, merged.overlay_opacity, merged.font_family);
 
     // Push the new config out to all live UI surfaces.
     crate::poll_service::notify_ui_refresh();
