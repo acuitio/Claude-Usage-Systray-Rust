@@ -272,22 +272,21 @@ unsafe fn render() {
     let bmp = CreateDIBSection(hdc_mem, &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
     let old_bmp = SelectObject(hdc_mem, bmp as HGDIOBJ);
 
-    // Background + border are filled NON-premultiplied so GDI text (which
-    // writes raw RGB without touching alpha) composes naturally on top.
-    // A single post-pass premultiplies everything at the end. Without this,
-    // AA edges between text and background end up with mismatched RGB↔A
-    // pairs and visibly alias.
+    // Opacity should affect the *background only*. So we fill bg with full
+    // alpha here, render text + dividers + border at full alpha (GDI text
+    // doesn't touch the A channel, so it inherits whatever the fill set),
+    // and then in a post-pass we knock the alpha of any pixel that's still
+    // exactly the bg color down to `bg_a` — leaving every GDI-touched
+    // pixel fully opaque.
     let opacity = cfg.overlay_opacity.clamp(0, 100) as u32;
     let bg_a = (opacity * 255 / 100).max(1);
     let bg_col = hex_to_colorref(&cfg.bg_color).unwrap_or(0x002e_1e1e);
-    let bg_pixel = nopremul_bgra(bg_col, bg_a);
-    fill_bgra(bits, (width * height) as usize, bg_pixel);
+    let bg_pixel_full   = nopremul_bgra(bg_col, 255);
+    fill_bgra(bits, (width * height) as usize, bg_pixel_full);
 
-    let border_a = (opacity * 255 / 100 * 3).min(255);
-    if border_a > 0 {
-        let border_pixel = nopremul_bgra(0x006c_4a4a, border_a);
-        draw_border(bits, width, height, border_pixel);
-    }
+    // Border always renders fully opaque on top of the translucent bg.
+    let border_pixel = nopremul_bgra(0x006c_4a4a, 255);
+    draw_border(bits, width, height, border_pixel);
 
     // Token pass — text & dividers.
     SetBkMode(hdc_mem, TRANSPARENT as i32);
@@ -315,10 +314,12 @@ unsafe fn render() {
         x += tok.width;
     }
 
-    // Premultiply every pixel in one pass. Background, border, and text all
-    // get their alpha baked into the RGB channels as ULW_ALPHA requires.
-    // GDI didn't touch the A channel during text drawing, so text pixels
-    // already have the surrounding bg_a — we just need to scale RGB by it.
+    // Step 1: knock the alpha of any pixel that's still the exact bg fill
+    //         colour down to `bg_a`. Everything GDI touched (text, dividers,
+    //         border, AA edges) keeps its alpha at 255 — fully opaque.
+    knock_bg_alpha(bits, (width * height) as usize, bg_pixel_full, bg_a);
+
+    // Step 2: premultiply RGB by alpha for ULW_ALPHA.
     premultiply_all(bits, (width * height) as usize);
 
     // Push to the layered window.
@@ -392,6 +393,22 @@ unsafe fn premultiply_all(bits: *mut c_void, count: usize) {
             | (premul(b, a) << 16)
             | (premul(g, a) << 8)
             | premul(r, a);
+    }
+}
+
+/// Walk every pixel; if its RGB (low 24 bits) exactly matches `bg_full_pixel`,
+/// rewrite it with alpha = `bg_a` instead of 255. Everything else (text,
+/// divider lines, border, AA fringes) stays at 255 so opacity only affects
+/// the background fill, not the rendered content.
+unsafe fn knock_bg_alpha(bits: *mut c_void, count: usize, bg_full_pixel: u32, bg_a: u32) {
+    if bg_a >= 255 { return; }
+    let p = bits as *mut u32;
+    let bg_rgb = bg_full_pixel & 0x00ff_ffff;
+    for i in 0..count {
+        let px = *p.add(i);
+        if (px & 0x00ff_ffff) == bg_rgb {
+            *p.add(i) = (bg_a << 24) | bg_rgb;
+        }
     }
 }
 
