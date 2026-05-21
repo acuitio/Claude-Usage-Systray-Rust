@@ -1,0 +1,21 @@
+# Rust build output
+target/
+Cargo.lock
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+
+# OS junk
+Thumbs.db
+.DS_Store
+
+# Local-only debug artifacts the runtime drops next to the exe
+crash.log
+*.log
+config.json
+usage_cache.json
+usage_history.json
+usage_ratelimit.json
+collector.pid
