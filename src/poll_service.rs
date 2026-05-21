@@ -62,6 +62,15 @@ fn host_hwnd() -> Option<HWND> {
     HOST.lock().ok()?.as_ref().map(|h| h.0 as HWND)
 }
 
+/// Post WM_USAGE_UPDATED to the host without doing a fetch. Use this from
+/// Settings::Apply so a font/color/opacity change immediately re-renders
+/// the tray icon + open overlay/dashboard/chart against the new config.
+pub fn notify_ui_refresh() {
+    if let Some(h) = host_hwnd() {
+        unsafe { PostMessageW(h, WM_USAGE_UPDATED, 0, 0); }
+    }
+}
+
 /// One-shot force fetch on its own thread. Used by the tray's "Refresh Now"
 /// menu item. We don't try to interrupt the polling thread's sleep — just
 /// run an independent fetch and post the redraw signal.

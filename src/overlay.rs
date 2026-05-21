@@ -336,10 +336,14 @@ unsafe fn render() {
     ReleaseDC(null_mut(), hdc_screen);
 }
 
-unsafe fn make_overlay_font(family: &str, height_px: i32, weight: i32) -> HFONT {
+unsafe fn make_overlay_font(family: &str, em_size_px: i32, weight: i32) -> HFONT {
     let face = wstr(family);
+    // Negative nHeight = the absolute value is the character (em-square) height
+    // in pixels. Positive would be the cell height, which makes glyphs ~75%
+    // of the requested size — that's what made the Rust overlay look smaller
+    // than the C# one, which uses GraphicsUnit.Pixel (≡ negative nHeight).
     CreateFontW(
-        height_px, 0, 0, 0, weight,
+        -em_size_px, 0, 0, 0, weight,
         0, 0, 0,
         DEFAULT_CHARSET as u32,
         OUT_DEFAULT_PRECIS as u32,

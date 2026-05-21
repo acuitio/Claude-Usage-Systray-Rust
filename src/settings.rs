@@ -463,7 +463,12 @@ unsafe fn apply_settings(hwnd: HWND) {
     if let Err(e) = config_store::save(&cfg) {
         let msg = wstr(&format!("Failed to save settings:\n{e}"));
         MessageBoxW(hwnd, msg.as_ptr(), w!("Settings"), MB_OK | MB_ICONERROR);
+        return;
     }
+
+    // Push the new config out to all live UI surfaces so font / color /
+    // opacity / overlay_format changes are visible immediately.
+    crate::poll_service::notify_ui_refresh();
 }
 
 unsafe fn handle_command(hwnd: HWND, wp: WPARAM) {
