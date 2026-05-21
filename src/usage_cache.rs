@@ -5,7 +5,6 @@ use crate::{models::*, paths};
 
 pub struct LoadedCache {
     pub data: Option<UsageResponse>,
-    pub refresh_iso: Option<String>,
     pub age_seconds: f64,
 }
 
@@ -15,11 +14,7 @@ pub fn load() -> Option<LoadedCache> {
     let bytes = std::fs::read(&path).ok()?;
     let env: CacheEnvelope = serde_json::from_slice(&bytes).ok()?;
     let age = unix_now() - env.ts;
-    Some(LoadedCache {
-        data: env.data,
-        refresh_iso: env.refresh,
-        age_seconds: age,
-    })
+    Some(LoadedCache { data: env.data, age_seconds: age })
 }
 
 pub fn save(data: Option<&UsageResponse>, refresh_iso: &str) -> std::io::Result<()> {

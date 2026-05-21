@@ -15,10 +15,6 @@ pub fn config()        -> PathBuf { app_dir().join("config.json") }
 pub fn cache()         -> PathBuf { app_dir().join("usage_cache.json") }
 pub fn history()       -> PathBuf { app_dir().join("usage_history.json") }
 pub fn cooldown()      -> PathBuf { app_dir().join("usage_ratelimit.json") }
-pub fn crash_log()     -> PathBuf { app_dir().join("crash.log") }
-pub fn collector_pid() -> PathBuf { app_dir().join("collector.pid") }
-pub fn collector_log() -> PathBuf { app_dir().join("collector.log") }
-pub fn icon()          -> PathBuf { app_dir().join("speedometer.ico") }
 
 /// `~/.claude/.credentials.json`. Absolute, NOT relative to the exe.
 pub fn credentials() -> PathBuf {

@@ -13,7 +13,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::common::*;
 use crate::webview_host::ParentWindow;
-use wry::WebViewBuilderExtWindows;
 
 static mut HWND_DASH: HWND = null_mut();
 
@@ -58,15 +57,25 @@ pub unsafe fn open(_owner: HWND) {
     };
     RegisterClassExW(&wc);
 
-    let mut wa: RECT = std::mem::zeroed();
-    SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut _ as *mut _, 0);
-    let dw = 540;
-    let dh = 560;
-    let x = wa.left + ((wa.right - wa.left) - dw) / 2;
-    let y = wa.top + ((wa.bottom - wa.top) - dh) / 2;
+    let cfg = crate::config_store::load();
+    let (x, y, dw, dh) = match (cfg.dashboard_x, cfg.dashboard_y, cfg.dashboard_w, cfg.dashboard_h) {
+        (Some(cx), Some(cy), Some(cw), Some(ch)) => (cx, cy, cw, ch),
+        _ => {
+            let mut wa: RECT = std::mem::zeroed();
+            SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut _ as *mut _, 0);
+            let dw = 540;
+            let dh = 560;
+            (
+                wa.left + ((wa.right - wa.left) - dw) / 2,
+                wa.top  + ((wa.bottom - wa.top) - dh) / 2,
+                dw, dh,
+            )
+        }
+    };
 
+    let ex_style = if cfg.dashboard_on_top { WS_EX_TOPMOST } else { 0 };
     HWND_DASH = CreateWindowExW(
-        0, class_name, w!("Dashboard"),
+        ex_style, class_name, w!("Dashboard"),
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         x, y, dw, dh,
         null_mut(), null_mut(), instance, std::ptr::null(),
@@ -75,6 +84,34 @@ pub unsafe fn open(_owner: HWND) {
         SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     UpdateWindow(HWND_DASH);
     SetForegroundWindow(HWND_DASH);
+
+    // Mark dashboard as open so the next launch can auto-restore.
+    let mut cfg = crate::config_store::load();
+    if !cfg.dashboard_open {
+        cfg.dashboard_open = true;
+        let _ = crate::config_store::save(&cfg);
+    }
+}
+
+/// Restore dashboard if it was open last session, at its last-saved rect.
+pub unsafe fn open_if_persisted() {
+    let cfg = crate::config_store::load();
+    if cfg.dashboard_open && !is_open() {
+        open(null_mut());
+    }
+}
+
+/// Persist the current window rect (x/y/w/h) to config. Called on
+/// WM_EXITSIZEMOVE and WM_DESTROY so the next launch can restore it.
+unsafe fn persist_rect(hwnd: HWND) {
+    let mut rc: RECT = std::mem::zeroed();
+    if GetWindowRect(hwnd, &mut rc) == 0 { return; }
+    let mut cfg = crate::config_store::load();
+    cfg.dashboard_x = Some(rc.left);
+    cfg.dashboard_y = Some(rc.top);
+    cfg.dashboard_w = Some(rc.right  - rc.left);
+    cfg.dashboard_h = Some(rc.bottom - rc.top);
+    let _ = crate::config_store::save(&cfg);
 }
 
 unsafe fn attach_webview(parent_hwnd: HWND) {
@@ -146,7 +183,6 @@ fn build_snapshot_json() -> String {
 
     let v = serde_json::json!({
         "plan":           usage.plan,
-        "email":          "",  // not yet fetched from /profile in this port
         "session_pct":    usage.session_pct,
         "weekly_pct":     usage.weekly_pct,
         "sonnet_pct":     usage.sonnet_pct,
@@ -158,6 +194,8 @@ fn build_snapshot_json() -> String {
         "show_session":   cfg.show_session,
         "show_weekly":    cfg.show_weekly,
         "show_sonnet":    cfg.show_sonnet,
+        "show_depletion_estimates": cfg.show_depletion_estimates,
+        "show_last_refresh":        cfg.show_last_refresh,
         "last_refresh_ago": last_refresh_ago,
         "extra":          extra_json,
     });
@@ -217,9 +255,16 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                 });
                 0
             }
-            WM_DPICHANGED => { handle_dpi_changed(hwnd, lp); 0 }
-            WM_CLOSE      => { DestroyWindow(hwnd); 0 }
+            WM_EXITSIZEMOVE => { persist_rect(hwnd); 0 }
+            WM_DPICHANGED   => { handle_dpi_changed(hwnd, lp); 0 }
+            WM_CLOSE        => { DestroyWindow(hwnd); 0 }
             WM_DESTROY => {
+                persist_rect(hwnd);
+                let mut cfg = crate::config_store::load();
+                if cfg.dashboard_open {
+                    cfg.dashboard_open = false;
+                    let _ = crate::config_store::save(&cfg);
+                }
                 WEBVIEW.with(|c| { c.borrow_mut().take(); });
                 HWND_DASH = null_mut();
                 0

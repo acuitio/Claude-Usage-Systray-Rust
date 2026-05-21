@@ -13,22 +13,6 @@ use crate::common::wstr;
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 pub const APP_NAME: &str = "ClaudeUsageSystray";
 
-pub fn is_enabled() -> bool {
-    unsafe {
-        let key_path = wstr(RUN_KEY);
-        let mut h: HKEY = null_mut();
-        if RegOpenKeyExW(HKEY_CURRENT_USER, key_path.as_ptr(), 0, KEY_READ, &mut h) != ERROR_SUCCESS {
-            return false;
-        }
-        let vname = wstr(APP_NAME);
-        let mut len: u32 = 0;
-        let mut ty: u32 = 0;
-        let exists = RegQueryValueExW(h, vname.as_ptr(), null_mut(), &mut ty, null_mut(), &mut len) == ERROR_SUCCESS;
-        RegCloseKey(h);
-        exists
-    }
-}
-
 /// `Some(path)` to enable (writes `"<path>"` to the Run key), `None` to disable
 /// (deletes the value). Best-effort; failures are logged to stderr but don't
 /// crash the app.

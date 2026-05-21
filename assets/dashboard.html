@@ -184,7 +184,6 @@
   <div class="header">
     <div>
       <div class="plan"  id="plan">—</div>
-      <div class="email" id="email"></div>
     </div>
     <div class="updated" id="updated">Not yet refreshed</div>
   </div>
@@ -208,9 +207,12 @@
     return 'dep';
   }
 
-  function renderBar(label, pct, resetStr, eta) {
+  function renderBar(label, pct, resetStr, eta, showEta) {
     const t = tone(pct);
     const etaCls = (eta && !eta.startsWith('Insufficient') && !eta.startsWith('—')) ? 'warn' : '';
+    const etaHtml = showEta
+      ? `<div class="bar-eta ${etaCls}">100% ETA: ${eta || 'Insufficient data'}</div>`
+      : '';
     return `
       <div class="bar-group">
         <div class="bar-row">
@@ -221,7 +223,7 @@
         <div class="bar-meta">
           <span>Resets in ${resetStr}</span>
         </div>
-        <div class="bar-eta ${etaCls}">100% ETA: ${eta || 'Insufficient data'}</div>
+        ${etaHtml}
       </div>
     `;
   }
@@ -253,14 +255,22 @@
 
   function applySnapshot(s) {
     document.getElementById('plan').textContent  = s.plan || 'Unknown';
-    document.getElementById('email').textContent = s.email || '';
-    document.getElementById('updated').textContent =
-      s.last_refresh_ago != null ? `Updated ${s.last_refresh_ago}` : 'Not yet refreshed';
 
+    const updated = document.getElementById('updated');
+    if (s.show_last_refresh) {
+      updated.style.display = '';
+      updated.textContent = s.last_refresh_ago != null
+        ? `Updated ${s.last_refresh_ago}`
+        : 'Not yet refreshed';
+    } else {
+      updated.style.display = 'none';
+    }
+
+    const showEta = !!s.show_depletion_estimates;
     const bars = [];
-    if (s.show_session) bars.push(renderBar('Session (5-hour)',    s.session_pct, s.session_reset, s.session_eta));
-    if (s.show_weekly)  bars.push(renderBar('Weekly (All Models)', s.weekly_pct,  s.weekly_reset,  s.weekly_eta));
-    if (s.show_sonnet)  bars.push(renderBar('Weekly (Sonnet)',     s.sonnet_pct,  s.weekly_reset,  s.sonnet_eta));
+    if (s.show_session) bars.push(renderBar('Session (5-hour)',    s.session_pct, s.session_reset, s.session_eta, showEta));
+    if (s.show_weekly)  bars.push(renderBar('Weekly (All Models)', s.weekly_pct,  s.weekly_reset,  s.weekly_eta,  showEta));
+    if (s.show_sonnet)  bars.push(renderBar('Weekly (Sonnet)',     s.sonnet_pct,  s.weekly_reset,  s.sonnet_eta,  showEta));
     document.getElementById('bars').innerHTML = bars.join('<div style="height:6px"></div>');
 
     document.getElementById('extra').innerHTML = renderExtra(s.extra);

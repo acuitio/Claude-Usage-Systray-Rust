@@ -17,7 +17,6 @@ pub struct AppConfig {
     #[serde(default = "default_scale_pct")]   pub scale_pct: i32,
     #[serde(default = "default_poll_sec")]    pub poll_interval_sec: i32,
     #[serde(default = "default_true")]        pub show_last_refresh: bool,
-    #[serde(default = "default_exact")]       pub refresh_display_mode: String,
     #[serde(default = "default_true")]        pub show_depletion_estimates: bool,
     #[serde(default = "default_true")]        pub show_session: bool,
     #[serde(default = "default_true")]        pub show_weekly: bool,
@@ -36,6 +35,13 @@ pub struct AppConfig {
     #[serde(default = "default_part")]        pub color_partial: String,
     #[serde(default = "default_depl")]        pub color_depleted: String,
     #[serde(default = "default_text")]        pub color_text: String,
+    // Dashboard window — persisted size, position, and last-open state so
+    // the next launch can restore them.
+    #[serde(default)]                         pub dashboard_open: bool,
+    #[serde(default)]                         pub dashboard_x: Option<i32>,
+    #[serde(default)]                         pub dashboard_y: Option<i32>,
+    #[serde(default)]                         pub dashboard_w: Option<i32>,
+    #[serde(default)]                         pub dashboard_h: Option<i32>,
 }
 
 impl Default for AppConfig {
@@ -48,7 +54,6 @@ impl Default for AppConfig {
             scale_pct: 100,
             poll_interval_sec: 300,
             show_last_refresh: true,
-            refresh_display_mode: "exact".into(),
             show_depletion_estimates: true,
             show_session: true,
             show_weekly: true,
@@ -67,6 +72,11 @@ impl Default for AppConfig {
             color_partial: "#e6c832".into(),
             color_depleted: "#e65050".into(),
             color_text: "#ffffff".into(),
+            dashboard_open: false,
+            dashboard_x: None,
+            dashboard_y: None,
+            dashboard_w: None,
+            dashboard_h: None,
         }
     }
 }
@@ -76,7 +86,6 @@ fn default_true()                  -> bool   { true }
 fn default_collector_interval_sec()-> i32    { 600 }
 fn default_scale_pct()             -> i32    { 100 }
 fn default_poll_sec()              -> i32    { 300 }
-fn default_exact()                 -> String { "exact".into() }
 fn default_tray()                  -> String { "tray".into() }
 fn default_overlay_fmt()           -> String { "{session}  |  {weekly}  |  {sonnet}".into() }
 fn default_opacity()               -> i32    { 85 }
@@ -140,16 +149,6 @@ pub struct OauthRefreshResponse {
     #[serde(default)] pub scope:         Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ProfileResponse {
-    #[serde(default)] pub account: Option<ProfileAccount>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ProfileAccount {
-    #[serde(default)] pub email: Option<String>,
-}
-
 // ─── Cache / cooldown envelopes ──────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -167,18 +166,3 @@ pub struct CooldownState {
 // History is stored as `[[ts, sp, wp, snp], ...]` — a plain Vec<[f64; 4]>
 // serializes/deserializes to exactly that shape via serde.
 pub type UsageHistory = Vec<[f64; 4]>;
-
-// ─── In-memory snapshot for the UI ───────────────────────────────────
-
-#[derive(Debug, Clone, Default)]
-pub struct UsageSnapshot {
-    pub session_pct: f64,
-    pub weekly_pct:  f64,
-    pub sonnet_pct:  f64,
-    pub session_reset_iso: Option<String>,
-    pub weekly_reset_iso:  Option<String>,
-    pub extra: Option<ExtraUsage>,
-    pub email: Option<String>,
-    pub plan:  String,
-    pub last_refresh_iso: Option<String>,
-}

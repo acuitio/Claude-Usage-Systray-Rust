@@ -94,8 +94,9 @@ fn main() {
         // back to the host window on every successful fetch.
         poll_service::start(host);
 
-        // Restore overlay if it was open last session.
+        // Restore overlay + dashboard if they were open last session.
         overlay::open_if_persisted();
+        dashboard::open_if_persisted();
 
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
@@ -116,7 +117,6 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             return 0;
         }
         if msg == poll_service::WM_USAGE_UPDATED {
-            common::dlog("host_proc: WM_USAGE_UPDATED received");
             tray::refresh();
             overlay::on_data_changed();
             dashboard::on_data_changed();

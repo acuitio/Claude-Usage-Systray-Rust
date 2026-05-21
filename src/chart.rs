@@ -116,16 +116,13 @@ fn resize_webview_to_parent(webview: &wry::WebView, parent: HWND) {
 
 fn push_history() {
     let hist = crate::usage_history::load();
-    match serde_json::to_string(&hist) {
-        Ok(json) => {
-            let js = format!("window.applyHistory && window.applyHistory({json})");
-            WEBVIEW.with(|c| {
-                if let Some(wv) = c.borrow().as_ref() {
-                    let _ = wv.evaluate_script(&js);
-                }
-            });
-        }
-        Err(e) => crate::common::dlog(&format!("chart: serialize history failed: {e}")),
+    if let Ok(json) = serde_json::to_string(&hist) {
+        let js = format!("window.applyHistory && window.applyHistory({json})");
+        WEBVIEW.with(|c| {
+            if let Some(wv) = c.borrow().as_ref() {
+                let _ = wv.evaluate_script(&js);
+            }
+        });
     }
 }
 

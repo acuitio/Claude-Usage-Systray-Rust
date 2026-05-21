@@ -1,23 +1,16 @@
 // Shared constants, palette, fonts, and tiny helpers used across modules.
 
 use std::ptr::null_mut;
-use windows_sys::core::PCWSTR;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 // ─── Palette (COLORREF = 0x00BBGGRR) ──────────────────────────────────
 pub const BG_DARK: u32      = 0x002e_1e1e;
-pub const FG_LIGHT: u32     = 0x00ff_ffff;
 pub const SURFACE: u32      = 0x0025_2525;
-pub const BORDER: u32       = 0x0033_3333;
-pub const ACCENT: u32       = 0x00c8_d456;
 pub const GREEN: u32        = 0x0033_ff33;
 pub const YELLOW: u32       = 0x0032_c8e6;
 pub const RED: u32          = 0x0050_50e6;
-
-// SS_ETCHEDFRAME not exposed by windows-sys; raw value from winuser.h.
-pub const SS_ETCHEDFRAME: u32 = 0x0000_0016;
 
 // ─── Cached resources (UI thread only) ────────────────────────────────
 pub static mut HBR_BG: HBRUSH = null_mut();
@@ -50,29 +43,6 @@ pub fn wstr(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-pub fn color_hex(c: u32) -> Vec<u16> {
-    let r = c & 0xff;
-    let g = (c >> 8) & 0xff;
-    let b = (c >> 16) & 0xff;
-    let s = format!("#{:02x}{:02x}{:02x}\0", r, g, b);
-    s.encode_utf16().collect()
-}
-
-/// Append a timestamped line to `debug.log` next to the exe. We can't use
-/// eprintln because windows-subsystem binaries have no stderr — this gives
-/// us a reliable trace mechanism without forcing AllocConsole at startup.
-pub fn dlog(msg: &str) {
-    use std::io::Write;
-    let path = crate::paths::app_dir().join("debug.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-        let _ = writeln!(f, "{secs:.3}  {msg}");
-    }
-}
-
 /// Parse "#RRGGBB" → COLORREF (0x00BBGGRR). Returns None on malformed input.
 pub fn hex_to_colorref(s: &str) -> Option<u32> {
     let s = s.trim_start_matches('#');
@@ -87,25 +57,6 @@ pub fn pct_color(pct: f64) -> u32 {
     if pct < 50.0 { GREEN }
     else if pct < 90.0 { YELLOW }
     else { RED }
-}
-
-pub unsafe fn create_child(
-    parent: HWND, class: PCWSTR, text: PCWSTR,
-    style: u32, x: i32, y: i32, w: i32, h: i32, id: u16,
-) -> HWND {
-    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    CreateWindowExW(
-        0, class, text, style,
-        x, y, w, h,
-        parent,
-        id as HMENU,
-        GetModuleHandleW(std::ptr::null()),
-        std::ptr::null(),
-    )
-}
-
-pub unsafe fn set_font(hwnd: HWND, font: HFONT) {
-    SendMessageW(hwnd, WM_SETFONT, font as WPARAM, 1);
 }
 
 /// WM_DPICHANGED handler. Windows supplies a suggested RECT in lParam with

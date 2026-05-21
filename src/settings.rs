@@ -14,7 +14,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::common::*;
 use crate::webview_host::ParentWindow;
 use crate::{config_store, models::AppConfig};
-use wry::WebViewBuilderExtWindows;
 
 static mut HWND_SETTINGS: HWND = null_mut();
 
@@ -110,13 +109,8 @@ fn push_config() {
 }
 
 fn handle_ipc(req: wry::http::Request<String>) {
-    crate::common::dlog(&format!("settings::handle_ipc ENTRY — body={}", req.body()));
-    let Ok(msg): Result<serde_json::Value, _> = serde_json::from_str(req.body()) else {
-        crate::common::dlog("settings::handle_ipc — body wasn't JSON, ignoring");
-        return;
-    };
+    let Ok(msg): Result<serde_json::Value, _> = serde_json::from_str(req.body()) else { return; };
     let cmd = msg.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
-    crate::common::dlog(&format!("settings::handle_ipc cmd={cmd}"));
     match cmd {
         "ready" => push_config(),
         "apply" => {
@@ -147,21 +141,7 @@ fn handle_ipc(req: wry::http::Request<String>) {
 }
 
 fn save_with_side_effects(cfg_val: &serde_json::Value) {
-    crate::common::dlog(&format!(
-        "settings::apply RAW JSON = {}",
-        serde_json::to_string(cfg_val).unwrap_or_default()
-    ));
-    let new_cfg: AppConfig = match serde_json::from_value(cfg_val.clone()) {
-        Ok(c) => c,
-        Err(e) => {
-            crate::common::dlog(&format!("settings::apply DESERIALIZE FAILED: {e}"));
-            return;
-        }
-    };
-    crate::common::dlog(&format!(
-        "settings::apply deserialized: scale_pct={} font={} opacity={}",
-        new_cfg.scale_pct, new_cfg.font_family, new_cfg.overlay_opacity
-    ));
+    let Ok(new_cfg): Result<AppConfig, _> = serde_json::from_value(cfg_val.clone()) else { return; };
     let old_cfg = config_store::load();
 
     // The form doesn't edit overlay drag position or the legacy
@@ -175,6 +155,11 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
         widget_h:               old_cfg.widget_h,
         background_collection:  old_cfg.background_collection,
         collector_interval_sec: old_cfg.collector_interval_sec,
+        dashboard_open:         old_cfg.dashboard_open,
+        dashboard_x:            old_cfg.dashboard_x,
+        dashboard_y:            old_cfg.dashboard_y,
+        dashboard_w:            old_cfg.dashboard_w,
+        dashboard_h:            old_cfg.dashboard_h,
         ..new_cfg
     };
 
@@ -189,16 +174,7 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
         }
     }
 
-    if let Err(e) = config_store::save(&merged) {
-        crate::common::dlog(&format!("settings::apply SAVE FAILED: {e}"));
-        return;
-    }
-
-    crate::common::dlog(&format!(
-        "settings::apply SAVED — scale_pct={} font={} opacity={}",
-        merged.scale_pct, merged.overlay_opacity, merged.font_family
-    ));
-    crate::common::dlog("settings::apply → notify_ui_refresh");
+    if config_store::save(&merged).is_err() { return; }
     crate::poll_service::notify_ui_refresh();
 }
 
