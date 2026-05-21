@@ -12,11 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 # Raw Win32 FFI bindings — no Param<T> trait machinery, smallest binary.
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Controls",
-    "Win32_UI_Controls_Dialogs",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -24,17 +23,17 @@ windows-sys = { version = "0.59", features = [
     "Win32_Graphics_GdiPlus",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
-    "Win32_Security",
 ] }
 
 # JSON I/O for config / cache / history / cooldown / credentials.
 serde      = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1" }
 
-# Synchronous HTTP for the Anthropic usage + OAuth-refresh endpoints. ureq
-# uses native-tls by default (SChannel on Windows) — zero extra binary cost
-# vs. rustls. No tokio required since it's blocking.
-ureq = { version = "2.10", features = ["json"] }
+# Synchronous HTTP for the Anthropic usage + OAuth-refresh endpoints.
+# `default-features = false` drops rustls + webpki-roots (~200 KB of TLS
+# root certs in the binary). `native-tls` routes through Windows SChannel
+# instead, which is already in the OS at zero binary cost.
+ureq = { version = "2.10", default-features = false, features = ["json", "native-tls"] }
 
 # WebView2 host for the dashboard / settings / chart surfaces. Lets us
 # render those windows as HTML/CSS instead of raw GDI. WebView2 Runtime
