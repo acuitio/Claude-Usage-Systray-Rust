@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Usage Chart</title>
+<style>
+  :root {
+    --bg:        #1a1a2e;
+    --surface:   #1e1e1e;
+    --border:    #333333;
+    --fg:        #ffffff;
+    --fg-dim:    #b0b0b0;
+    --fg-faint:  #888888;
+    --grid:      #2d3340;
+    --session:   #3fb950;
+    --weekly:    #e6c832;
+    --sonnet:    #f85149;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%; width: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    overflow: hidden;
+  }
+  .container {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 18px;
+    gap: 8px;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.1px;
+  }
+  .legend {
+    display: flex;
+    gap: 14px;
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .swatch {
+    width: 12px; height: 12px;
+    border-radius: 2px;
+  }
+  .swatch.session { background: var(--session); }
+  .swatch.weekly  { background: var(--weekly); }
+  .swatch.sonnet  { background: var(--sonnet); }
+
+  .canvas-wrap {
+    position: relative;
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  canvas { display: block; }
+  #empty {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+  #empty.show { display: flex; }
+
+  #tooltip {
+    position: absolute;
+    background: rgba(20, 20, 30, 0.95);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 11px;
+    color: var(--fg);
+    pointer-events: none;
+    display: none;
+    white-space: nowrap;
+    z-index: 10;
+    font-variant-numeric: tabular-nums;
+  }
+  #tooltip.show { display: block; }
+  #tooltip .ts { color: var(--fg-dim); margin-bottom: 4px; }
+  #tooltip .row { display: flex; gap: 8px; align-items: center; }
+  #tooltip .dot { width: 8px; height: 8px; border-radius: 2px; }
+  #tooltip .label { color: var(--fg-dim); width: 56px; }
+  #tooltip .val { font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h2>Usage History</h2>
+    <div class="legend">
+      <div class="legend-item"><div class="swatch session"></div>Session</div>
+      <div class="legend-item"><div class="swatch weekly"></div>Weekly</div>
+      <div class="legend-item"><div class="swatch sonnet"></div>Sonnet</div>
+    </div>
+  </div>
+  <div class="canvas-wrap">
+    <canvas id="canvas"></canvas>
+    <div id="empty">Insufficient data — waiting for more samples.</div>
+    <div id="tooltip"></div>
+  </div>
+</div>
+
+<script>
+  const COLORS = {
+    session: '#3fb950',
+    weekly:  '#e6c832',
+    sonnet:  '#f85149',
+    grid:    '#2d3340',
+    label:   '#b0b0b0',
+  };
+  // Each entry is [ts_epoch_secs, session_pct, weekly_pct, sonnet_pct].
+  let history = [];
+  let hoverIdx = -1;
+
+  const canvas  = document.getElementById('canvas');
+  const ctx     = canvas.getContext('2d');
+  const tooltip = document.getElementById('tooltip');
+  const emptyEl = document.getElementById('empty');
+
+  // Plot geometry — used by both draw() and pickIndex().
+  let geom = { padL: 0, padR: 0, padT: 0, padB: 0, gw: 0, gh: 0, t0: 0, tSpan: 1 };
+
+  function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+
+  function formatTick(epoch, spanSecs) {
+    const d = new Date(epoch * 1000);
+    if (spanSecs > 86400) {
+      return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  function formatTooltipTs(epoch) {
+    const d = new Date(epoch * 1000);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
+           `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  function fitCanvas() {
+    // Match canvas backing-store to its CSS size × devicePixelRatio so lines
+    // stay crisp on hi-DPI monitors.
+    const wrap = canvas.parentElement;
+    const dpr = window.devicePixelRatio || 1;
+    const w = wrap.clientWidth;
+    const h = wrap.clientHeight;
+    canvas.style.width  = w + 'px';
+    canvas.style.height = h + 'px';
+    canvas.width  = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function draw() {
+    fitCanvas();
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    ctx.clearRect(0, 0, w, h);
+
+    if (!history || history.length < 2) {
+      emptyEl.classList.add('show');
+      return;
+    }
+    emptyEl.classList.remove('show');
+
+    const padL = 48, padR = 18, padT = 16, padB = 28;
+    const gw = w - padL - padR;
+    const gh = h - padT - padB;
+    if (gw <= 10 || gh <= 10) return;
+
+    const t0    = history[0][0];
+    const t1    = history[history.length - 1][0];
+    const tSpan = Math.max(1, t1 - t0);
+    geom = { padL, padR, padT, padB, gw, gh, t0, tSpan };
+
+    // Grid + Y labels.
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth   = 1;
+    ctx.fillStyle   = COLORS.label;
+    ctx.font        = '11px "Segoe UI Variable", "Segoe UI", system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign    = 'right';
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + gh * i / 4;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(padL + gw, y);
+      ctx.stroke();
+      ctx.fillText((100 - i * 25) + '%', padL - 6, y);
+    }
+
+    // X-axis tick labels — 3 evenly spaced.
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'top';
+    for (let i = 0; i <= 2; i++) {
+      const x = padL + gw * i / 2;
+      const t = t0 + tSpan * i / 2;
+      ctx.fillText(formatTick(t, tSpan), x, padT + gh + 6);
+    }
+
+    // Plot each series.
+    const series = [
+      { idx: 1, color: COLORS.session },
+      { idx: 2, color: COLORS.weekly  },
+      { idx: 3, color: COLORS.sonnet  },
+    ];
+    for (const s of series) {
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth   = 2;
+      ctx.lineJoin    = 'round';
+      ctx.lineCap     = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < history.length; i++) {
+        const ts  = history[i][0];
+        const val = history[i][s.idx];
+        const x = padL + ((ts - t0) / tSpan) * gw;
+        const y = padT + (1 - val / 100) * gh;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // Hover crosshair + dots.
+    if (hoverIdx >= 0 && hoverIdx < history.length) {
+      const e = history[hoverIdx];
+      const x = padL + ((e[0] - t0) / tSpan) * gw;
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, padT);
+      ctx.lineTo(x, padT + gh);
+      ctx.stroke();
+      for (const s of series) {
+        const y = padT + (1 - e[s.idx] / 100) * gh;
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function pickIndex(mouseX) {
+    if (history.length < 2) return -1;
+    const { padL, gw, t0, tSpan } = geom;
+    // Linear search; history is bounded at 500 entries, so this is fine.
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < history.length; i++) {
+      const x = padL + ((history[i][0] - t0) / tSpan) * gw;
+      const d = Math.abs(x - mouseX);
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    return bestDist <= 20 ? best : -1;
+  }
+
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const newIdx = pickIndex(mx);
+    if (newIdx !== hoverIdx) {
+      hoverIdx = newIdx;
+      draw();
+    }
+    if (hoverIdx >= 0) {
+      const en = history[hoverIdx];
+      tooltip.innerHTML =
+        `<div class="ts">${formatTooltipTs(en[0])}</div>` +
+        `<div class="row"><div class="dot" style="background:${COLORS.session}"></div>` +
+          `<div class="label">Session</div><div class="val">${en[1].toFixed(1)}%</div></div>` +
+        `<div class="row"><div class="dot" style="background:${COLORS.weekly}"></div>` +
+          `<div class="label">Weekly</div><div class="val">${en[2].toFixed(1)}%</div></div>` +
+        `<div class="row"><div class="dot" style="background:${COLORS.sonnet}"></div>` +
+          `<div class="label">Sonnet</div><div class="val">${en[3].toFixed(1)}%</div></div>`;
+      tooltip.classList.add('show');
+      // Position tooltip near mouse, but flip sides if near right edge.
+      const tw = tooltip.offsetWidth;
+      const wrapW = canvas.parentElement.clientWidth;
+      let tx = mx + 14;
+      if (tx + tw > wrapW - 8) tx = mx - tw - 14;
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top  = (my + 14) + 'px';
+    } else {
+      tooltip.classList.remove('show');
+    }
+  });
+  canvas.addEventListener('mouseleave', () => {
+    hoverIdx = -1;
+    tooltip.classList.remove('show');
+    draw();
+  });
+
+  window.addEventListener('resize', draw);
+
+  // Rust pushes history here.
+  window.applyHistory = function (h) {
+    history = Array.isArray(h) ? h : [];
+    hoverIdx = -1;
+    tooltip.classList.remove('show');
+    draw();
+  };
+
+  // Ask Rust for the initial snapshot the moment we're ready.
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.postMessage(JSON.stringify({ cmd: 'ready' }));
+  }
+</script>
+</body>
+</html>
