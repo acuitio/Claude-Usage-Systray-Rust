@@ -360,8 +360,8 @@ unsafe fn render() {
     // Dividers are intentionally not shadowed — they're thin lines that
     // would just blur into smudges.
     const SHADOW_DX:           f32 = 0.0;
-    const SHADOW_GLOW_FACTOR:  f32 = 0.15;
-    const SHADOW_CORE_FACTOR:  f32 = 0.30;
+    const SHADOW_GLOW_FACTOR:  f32 = 0.10;
+    const SHADOW_CORE_FACTOR:  f32 = 0.20;
     let y_base = pad_y + 1;
     apply_shadow_layer(
         hdc_screen, width, height, &tokens, pad_x, y_base,
