@@ -273,6 +273,16 @@ unsafe fn render() {
     }
     content_h = content_h.max((12.0 * scale) as i32);
 
+    // Two-pass drop shadow: a tight CORE defines the letter shape, a wide
+    // GLOW diffuses outward so the text integrates with the backdrop rather
+    // than looking pasted on. Constants mirror Python's _render_overlay_image.
+    let shadow_dy        = (scale * 1.0).max(1.0);
+    let shadow_core_blur = (scale * 1.5).max(1.5);
+    let shadow_glow_blur = (scale * 5.0).max(4.0);
+    // Grow the bitmap so the widest blurred shadow can spread below the text
+    // without being clipped.
+    content_h += shadow_dy as i32 + shadow_glow_blur as i32 + 1;
+
     GdipDeleteGraphics(g_measure);
 
     let pad_x: i32 = 10;
@@ -336,12 +346,29 @@ unsafe fn render() {
     GdipFillRectangleI(g, bg_brush as *mut GpBrush, 0, 0, width, height);
     GdipDeleteBrush(bg_brush as *mut GpBrush);
 
+    // ── Two-pass drop shadow (glow first, then tight core on top) ──────
+    // Dividers are intentionally not shadowed — they're thin lines that
+    // would just blur into smudges.
+    const SHADOW_DX:           f32 = 0.0;
+    const SHADOW_GLOW_FACTOR:  f32 = 0.35;
+    const SHADOW_CORE_FACTOR:  f32 = 0.70;
+    let y_base = pad_y + 1;
+    apply_shadow_layer(
+        hdc_screen, width, height, &tokens, pad_x, y_base,
+        SHADOW_DX, shadow_dy, font_main, font_sep, sf,
+        shadow_glow_blur, SHADOW_GLOW_FACTOR, g,
+    );
+    apply_shadow_layer(
+        hdc_screen, width, height, &tokens, pad_x, y_base,
+        SHADOW_DX, shadow_dy, font_main, font_sep, sf,
+        shadow_core_blur, SHADOW_CORE_FACTOR, g,
+    );
+
     // ── Tokens — text and dividers ──────────────────────────────────────
     let div_h = content_h * 60 / 100;
     let div_top = pad_y + 1 + (content_h - div_h) / 2;
     let div_bot = div_top + div_h - 1;
     let mut x = pad_x + 1;
-    let y_base = pad_y + 1;
 
     for tok in &tokens {
         if tok.kind == TokenKind::Div {
@@ -397,6 +424,108 @@ unsafe fn render() {
     DeleteObject(bmp as HGDIOBJ);
     DeleteDC(hdc_mem);
     ReleaseDC(null_mut(), hdc_screen);
+}
+
+// ─── Shadow layer ─────────────────────────────────────────────────────
+
+/// One pass of the two-pass drop shadow. Renders black text into a private
+/// PARGB scratch bitmap, runs the GDI+ Blur effect on it at `blur_radius`,
+/// scales the alpha channel by `alpha_factor`, then composites the result
+/// onto `main_g`. Call twice per render — wide+faint for the glow,
+/// tight+stronger for the core — to match Python's _render_overlay_image.
+#[allow(clippy::too_many_arguments)]
+unsafe fn apply_shadow_layer(
+    hdc_screen: HDC,
+    width: i32, height: i32,
+    tokens: &[OverlayToken],
+    pad_x: i32, y_base: i32,
+    shadow_dx: f32, shadow_dy: f32,
+    font_main: *mut GpFont, font_sep: *mut GpFont, sf: *mut GpStringFormat,
+    blur_radius: f32, alpha_factor: f32,
+    main_g: *mut GpGraphics,
+) {
+    // ── Scratch DIB-backed PARGB bitmap, same dimensions as the overlay ─
+    let hdc_mem = CreateCompatibleDC(hdc_screen);
+    let mut bi: BITMAPINFO = std::mem::zeroed();
+    bi.bmiHeader.biSize        = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    bi.bmiHeader.biWidth       = width;
+    bi.bmiHeader.biHeight      = -height;
+    bi.bmiHeader.biPlanes      = 1;
+    bi.bmiHeader.biBitCount    = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    let mut bits: *mut c_void = null_mut();
+    let bmp = CreateDIBSection(hdc_mem, &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+    let old_bmp = SelectObject(hdc_mem, bmp as HGDIOBJ);
+
+    let mut gp_bmp: *mut GpBitmap = null_mut();
+    GdipCreateBitmapFromScan0(
+        width, height, width * 4,
+        PIXEL_FORMAT_32BPP_PARGB,
+        bits as *mut u8, &mut gp_bmp,
+    );
+
+    let mut g: *mut GpGraphics = null_mut();
+    GdipGetImageGraphicsContext(gp_bmp as *mut GpImage, &mut g);
+    GdipSetTextRenderingHint(g, TextRenderingHintAntiAlias);
+    GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+    GdipGraphicsClear(g, 0);
+
+    // ── Draw text tokens in opaque black (R=G=B=0, A=255) ──────────────
+    let mut brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(0xFF00_0000, &mut brush);
+    let mut x = pad_x + 1;
+    for tok in tokens {
+        if tok.kind == TokenKind::Div { x += tok.width; continue; }
+        let font = if tok.style == FontStyle::Main { font_main } else { font_sep };
+        let text_wide = wstr(&tok.text);
+        let layout = RectF {
+            X: x as f32 + shadow_dx,
+            Y: y_base as f32 + shadow_dy,
+            Width:  tok.width as f32 + 4.0,
+            Height: tok.height as f32 + 4.0,
+        };
+        GdipDrawString(
+            g, text_wide.as_ptr(), (text_wide.len() - 1) as i32,
+            font, &layout, sf, brush as *mut GpBrush,
+        );
+        x += tok.width;
+    }
+    GdipDeleteBrush(brush as *mut GpBrush);
+    GdipDeleteGraphics(g);
+
+    // ── Apply Gaussian blur in place via the GDI+ Effects API ──────────
+    // expandEdge=false: keep output the same size as input. We pre-sized
+    // the overlay bitmap with extra room below the text to fit the glow.
+    let mut effect: *mut CGpEffect = null_mut();
+    if GdipCreateEffect(BlurEffectGuid, &mut effect) == 0 && !effect.is_null() {
+        let params = BlurParams { radius: blur_radius, expandEdge: 0 };
+        GdipSetEffectParameters(
+            effect,
+            &params as *const _ as *const c_void,
+            std::mem::size_of::<BlurParams>() as u32,
+        );
+        GdipBitmapApplyEffect(gp_bmp, effect, null_mut(), 0, null_mut(), null_mut());
+        GdipDeleteEffect(effect);
+    }
+
+    // ── Scale alpha in place ───────────────────────────────────────────
+    // The source is pure black (R=G=B=0) and stays that way after blur,
+    // so PARGB premul is trivially preserved when we only touch A.
+    let pixel_count = (width as usize) * (height as usize);
+    let buf = std::slice::from_raw_parts_mut(bits as *mut u8, pixel_count * 4);
+    for i in 0..pixel_count {
+        let a = buf[i * 4 + 3] as f32 * alpha_factor;
+        buf[i * 4 + 3] = a.clamp(0.0, 255.0) as u8;
+    }
+
+    // ── Composite onto the main overlay bitmap ─────────────────────────
+    GdipDrawImageI(main_g, gp_bmp as *mut GpImage, 0, 0);
+
+    // ── Cleanup ────────────────────────────────────────────────────────
+    GdipDisposeImage(gp_bmp as *mut GpImage);
+    SelectObject(hdc_mem, old_bmp);
+    DeleteObject(bmp as HGDIOBJ);
+    DeleteDC(hdc_mem);
 }
 
 // ─── GDI+ helpers ─────────────────────────────────────────────────────
