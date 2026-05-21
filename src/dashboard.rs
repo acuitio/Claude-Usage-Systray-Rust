@@ -209,6 +209,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                 SetTextColor(wp as HDC, FG_LIGHT);
                 HBR_BG as LRESULT
             }
+            WM_DPICHANGED => { handle_dpi_changed(hwnd, lp); 0 }
             WM_DESTROY => { HWND_DASH = null_mut(); 0 }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
         }

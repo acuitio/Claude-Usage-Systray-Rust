@@ -83,6 +83,22 @@ pub unsafe fn set_font(hwnd: HWND, font: HFONT) {
     SendMessageW(hwnd, WM_SETFONT, font as WPARAM, 1);
 }
 
+/// WM_DPICHANGED handler. Windows supplies a suggested RECT in lParam with
+/// the new monitor's DPI-scaled coordinates; we just honor it. Per-monitor
+/// V2 DPI awareness auto-scales common controls; custom-painted regions
+/// use device units and stay correct as long as we resize the parent.
+///
+/// wParam encodes the new DPI but we don't need it for our usage.
+pub unsafe fn handle_dpi_changed(hwnd: HWND, lp: LPARAM) {
+    let rc = lp as *const RECT;
+    if rc.is_null() { return; }
+    let r = *rc;
+    SetWindowPos(hwnd, std::ptr::null_mut(),
+        r.left, r.top, r.right - r.left, r.bottom - r.top,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+    InvalidateRect(hwnd, std::ptr::null(), 0);
+}
+
 // ─── Current usage snapshot — reads cache + credentials ───────────────
 // Falls back to zeros + "Unknown" plan if no cache yet. The HTTP layer
 // (future work) populates the cache; UI just reads it.

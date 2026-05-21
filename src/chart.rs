@@ -230,6 +230,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             WM_PAINT      => { paint(hwnd); 0 }
             WM_ERASEBKGND => 1,
             WM_SIZE       => { InvalidateRect(hwnd, std::ptr::null(), 0); 0 }
+            WM_DPICHANGED => { handle_dpi_changed(hwnd, lp); 0 }
             WM_CLOSE      => { DestroyWindow(hwnd); 0 }
             WM_DESTROY    => { HWND_CHART = null_mut(); 0 }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
