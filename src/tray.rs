@@ -48,18 +48,24 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
         let menu = CreatePopupMenu();
         let dash_open = dashboard::is_open();
         let overlay_open = overlay::is_open();
+        // Group 1: openable windows (each shows a check when its window is up)
         AppendMenuW(menu,
             MF_STRING | if dash_open { MF_CHECKED } else { MF_UNCHECKED },
             ID_MENU_DASHBOARD as usize, w!("Dashboard"));
         AppendMenuW(menu,
             MF_STRING | if overlay_open { MF_CHECKED } else { MF_UNCHECKED },
             ID_MENU_OVERLAY as usize, w!("Overlay"));
-        AppendMenuW(menu, MF_STRING, ID_MENU_REFRESH as usize, w!("Refresh Now"));
         AppendMenuW(menu,
             MF_STRING | if chart::is_open() { MF_CHECKED } else { MF_UNCHECKED },
             ID_MENU_CHART as usize, w!("Usage Chart"));
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+
+        // Group 2: actions
+        AppendMenuW(menu, MF_STRING, ID_MENU_REFRESH as usize,  w!("Refresh Now"));
         AppendMenuW(menu, MF_STRING, ID_MENU_SETTINGS as usize, w!("Settings"));
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+
+        // Group 3: exit
         AppendMenuW(menu, MF_STRING, ID_MENU_QUIT as usize, w!("Quit"));
 
         // Required so TrackPopupMenu can dismiss on outside click
