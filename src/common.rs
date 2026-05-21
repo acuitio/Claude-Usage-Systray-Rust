@@ -58,6 +58,21 @@ pub fn color_hex(c: u32) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
+/// Append a timestamped line to `debug.log` next to the exe. We can't use
+/// eprintln because windows-subsystem binaries have no stderr — this gives
+/// us a reliable trace mechanism without forcing AllocConsole at startup.
+pub fn dlog(msg: &str) {
+    use std::io::Write;
+    let path = crate::paths::app_dir().join("debug.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let _ = writeln!(f, "{secs:.3}  {msg}");
+    }
+}
+
 /// Parse "#RRGGBB" → COLORREF (0x00BBGGRR). Returns None on malformed input.
 pub fn hex_to_colorref(s: &str) -> Option<u32> {
     let s = s.trim_start_matches('#');

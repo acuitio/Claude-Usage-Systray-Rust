@@ -142,13 +142,21 @@ fn handle_ipc(req: wry::http::Request<String>) {
 }
 
 fn save_with_side_effects(cfg_val: &serde_json::Value) {
+    crate::common::dlog(&format!(
+        "settings::apply RAW JSON = {}",
+        serde_json::to_string(cfg_val).unwrap_or_default()
+    ));
     let new_cfg: AppConfig = match serde_json::from_value(cfg_val.clone()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("settings: failed to deserialize incoming config: {e}");
+            crate::common::dlog(&format!("settings::apply DESERIALIZE FAILED: {e}"));
             return;
         }
     };
+    crate::common::dlog(&format!(
+        "settings::apply deserialized: scale_pct={} font={} opacity={}",
+        new_cfg.scale_pct, new_cfg.font_family, new_cfg.overlay_opacity
+    ));
     let old_cfg = config_store::load();
 
     // The form doesn't edit overlay drag position or the legacy
@@ -177,14 +185,15 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
     }
 
     if let Err(e) = config_store::save(&merged) {
-        eprintln!("settings: save failed: {e}");
+        crate::common::dlog(&format!("settings::apply SAVE FAILED: {e}"));
         return;
     }
 
-    eprintln!("settings: applied — scale_pct={}, overlay_opacity={}, font_family={}",
-        merged.scale_pct, merged.overlay_opacity, merged.font_family);
-
-    // Push the new config out to all live UI surfaces.
+    crate::common::dlog(&format!(
+        "settings::apply SAVED — scale_pct={} font={} opacity={}",
+        merged.scale_pct, merged.overlay_opacity, merged.font_family
+    ));
+    crate::common::dlog("settings::apply → notify_ui_refresh");
     crate::poll_service::notify_ui_refresh();
 }
 

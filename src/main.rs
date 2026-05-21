@@ -113,6 +113,7 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             return 0;
         }
         if msg == poll_service::WM_USAGE_UPDATED {
+            common::dlog("host_proc: WM_USAGE_UPDATED received");
             tray::refresh();
             overlay::on_data_changed();
             dashboard::on_data_changed();

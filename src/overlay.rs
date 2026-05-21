@@ -193,7 +193,10 @@ fn pct_color_cfg(pct: f64, cfg: &AppConfig) -> u32 {
 // ─── Render ───────────────────────────────────────────────────────────
 
 unsafe fn render() {
-    if !is_open() { return; }
+    if !is_open() {
+        crate::common::dlog("overlay::render skipped — not open");
+        return;
+    }
     let cfg = crate::config_store::load();
     let usage = current_snapshot();
 
@@ -201,6 +204,10 @@ unsafe fn render() {
     let scale = (cfg.scale_pct.max(1) as f64) / 100.0;
     let main_size = ((11.0 * scale * 4.0 / 3.0) as i32).max(9);
     let sep_size  = ((10.0 * scale * 4.0 / 3.0) as i32).max(8);
+    crate::common::dlog(&format!(
+        "overlay::render — scale_pct={} font={} opacity={} main_size={} sep_size={}",
+        cfg.scale_pct, cfg.font_family, cfg.overlay_opacity, main_size, sep_size,
+    ));
     let font_main = make_overlay_font(&cfg.font_family, main_size, FW_BOLD as i32);
     let font_sep  = make_overlay_font(&cfg.font_family, sep_size,  FW_NORMAL as i32);
 
