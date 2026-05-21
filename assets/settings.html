@@ -156,14 +156,10 @@
     <hr class="sep">
 
     <div class="section">
-      <h3>Display Mode</h3>
-      <div class="row">
-        <label class="field-label" for="display_mode">Mode</label>
-        <select id="display_mode">
-          <option value="tray">tray</option>
-          <option value="overlay">overlay</option>
-        </select>
-      </div>
+      <h3>Display</h3>
+      <!-- display_mode is driven by the tray menu's Overlay toggle, not exposed
+           here — hidden input round-trips the value so Apply preserves it. -->
+      <input type="hidden" id="display_mode">
       <div class="row">
         <label class="field-label" for="overlay_opacity">Overlay opacity (0–100)</label>
         <input type="number" id="overlay_opacity" min="0" max="100">
