@@ -535,9 +535,10 @@ fn lparam_to_point(lp: LPARAM) -> POINT {
     }
 }
 
-/// Make sure `(x, y)` lands fully inside the *work area* of whichever
-/// monitor it's closest to. Work area excludes the taskbar, so an overlay
-/// at the bottom edge of the virtual screen doesn't end up obscured by it.
+/// Make sure `(x, y)` lands fully inside the *full monitor area* of whichever
+/// monitor it's closest to. We use the monitor bounds, not the work area, so
+/// the user can position the overlay over the taskbar's footprint — z-order
+/// (topmost re-assertion + WM_WINDOWPOSCHANGING) keeps it visually above.
 unsafe fn clamp_to_virtual_screen(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
@@ -546,15 +547,17 @@ unsafe fn clamp_to_virtual_screen(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) 
     let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
     let mut mi: MONITORINFO = std::mem::zeroed();
     mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-    let wa = if GetMonitorInfoW(monitor, &mut mi) != 0 {
-        mi.rcWork
+    let rc = if GetMonitorInfoW(monitor, &mut mi) != 0 {
+        mi.rcMonitor
     } else {
-        // Fallback: primary work area via SPI.
-        let mut r: RECT = std::mem::zeroed();
-        SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut r as *mut _ as *mut _, 0);
-        r
+        // Fallback: primary monitor metrics.
+        RECT {
+            left: 0, top: 0,
+            right:  GetSystemMetrics(SM_CXSCREEN),
+            bottom: GetSystemMetrics(SM_CYSCREEN),
+        }
     };
-    let max_x = (wa.right - w).max(wa.left);
-    let max_y = (wa.bottom - h).max(wa.top);
-    (x.clamp(wa.left, max_x), y.clamp(wa.top, max_y))
+    let max_x = (rc.right  - w).max(rc.left);
+    let max_y = (rc.bottom - h).max(rc.top);
+    (x.clamp(rc.left, max_x), y.clamp(rc.top, max_y))
 }
