@@ -266,18 +266,20 @@
     document.getElementById('extra').innerHTML = renderExtra(s.extra);
   }
 
-  function refresh() {
-    window.chrome?.webview?.postMessage({ cmd: 'refresh' });
+  function send(payload) {
+    if (window.chrome && window.chrome.webview) {
+      // WebView2 requires a string here — passing an object silently fails.
+      window.chrome.webview.postMessage(JSON.stringify(payload));
+    }
   }
-  function openAccountSettings() {
-    window.chrome?.webview?.postMessage({ cmd: 'open_account_settings' });
-  }
+  function refresh()              { send({ cmd: 'refresh' }); }
+  function openAccountSettings()  { send({ cmd: 'open_account_settings' }); }
 
   // Rust pushes data here.
   window.applySnapshot = applySnapshot;
 
   // Ask Rust for an initial snapshot the moment we're ready.
-  window.chrome?.webview?.postMessage({ cmd: 'ready' });
+  send({ cmd: 'ready' });
 </script>
 </body>
 </html>

@@ -256,13 +256,14 @@
   </div>
 
   <div class="buttons">
-    <button class="danger" onclick="resetDefaults()">Reset to Defaults</button>
+    <button id="btn-reset" class="danger">Reset to Defaults</button>
     <div style="display:flex; gap:8px">
-      <button onclick="cancel()">Cancel</button>
-      <button onclick="apply()">Apply</button>
-      <button class="primary" onclick="saveAndExit()">Save &amp; Exit</button>
+      <button id="btn-cancel">Cancel</button>
+      <button id="btn-apply">Apply</button>
+      <button id="btn-saveexit" class="primary">Save &amp; Exit</button>
     </div>
   </div>
+  <div id="status-bar" style="padding:6px 22px; background:#1e1e1e; border-top:1px solid #333; font-size:11px; color:#888; min-height:18px">Loading…</div>
 </div>
 
 <script>
@@ -306,20 +307,43 @@
     return cfg;
   }
 
-  function apply() {
-    window.chrome?.webview?.postMessage({ cmd: 'apply', cfg: collectConfig() });
+  function setStatus(text, isErr) {
+    const el = document.getElementById('status-bar');
+    el.textContent = text;
+    el.style.color = isErr ? '#f85149' : '#888';
   }
-  function saveAndExit() {
-    window.chrome?.webview?.postMessage({ cmd: 'save_exit', cfg: collectConfig() });
-  }
-  function cancel() {
-    window.chrome?.webview?.postMessage({ cmd: 'cancel' });
-  }
-  function resetDefaults() {
-    if (confirm('Reset all settings to defaults?')) {
-      window.chrome?.webview?.postMessage({ cmd: 'reset_defaults' });
+
+  function postCmd(payload) {
+    setStatus('Click → ' + payload.cmd);
+    try {
+      if (!window.chrome || !window.chrome.webview) {
+        setStatus('ERROR: window.chrome.webview missing — IPC bridge not injected', true);
+        return;
+      }
+      // WebView2's TryGetWebMessageAsString — which wry uses — only works
+      // when JS passes a *string* (objects fail with E_INVALIDARG and the
+      // host's handler is silently never called). Stringify here.
+      window.chrome.webview.postMessage(JSON.stringify(payload));
+      setStatus('Sent: ' + payload.cmd + ' at ' + new Date().toLocaleTimeString());
+    } catch (e) {
+      setStatus('postMessage error: ' + e.message, true);
     }
   }
+
+  function apply()        { postCmd({ cmd: 'apply',     cfg: collectConfig() }); }
+  function saveAndExit()  { postCmd({ cmd: 'save_exit', cfg: collectConfig() }); }
+  function cancel()       { postCmd({ cmd: 'cancel' }); }
+  function resetDefaults(){ if (confirm('Reset all settings to defaults?')) postCmd({ cmd: 'reset_defaults' }); }
+
+  // Bind via addEventListener (inline onclick can be blocked by WebView2's
+  // default CSP).
+  document.addEventListener('DOMContentLoaded', () => {
+    setStatus('DOM ready. window.chrome.webview = ' + (window.chrome && window.chrome.webview ? 'OK' : 'MISSING'));
+    document.getElementById('btn-apply').addEventListener('click', apply);
+    document.getElementById('btn-saveexit').addEventListener('click', saveAndExit);
+    document.getElementById('btn-cancel').addEventListener('click', cancel);
+    document.getElementById('btn-reset').addEventListener('click', resetDefaults);
+  });
 
   // Wire color picker → hex readout updates
   for (const id of ['bg_color', 'color_text', 'color_sufficient', 'color_partial', 'color_depleted']) {

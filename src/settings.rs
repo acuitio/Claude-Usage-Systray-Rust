@@ -110,8 +110,13 @@ fn push_config() {
 }
 
 fn handle_ipc(req: wry::http::Request<String>) {
-    let Ok(msg): Result<serde_json::Value, _> = serde_json::from_str(req.body()) else { return; };
+    crate::common::dlog(&format!("settings::handle_ipc ENTRY — body={}", req.body()));
+    let Ok(msg): Result<serde_json::Value, _> = serde_json::from_str(req.body()) else {
+        crate::common::dlog("settings::handle_ipc — body wasn't JSON, ignoring");
+        return;
+    };
     let cmd = msg.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+    crate::common::dlog(&format!("settings::handle_ipc cmd={cmd}"));
     match cmd {
         "ready" => push_config(),
         "apply" => {
