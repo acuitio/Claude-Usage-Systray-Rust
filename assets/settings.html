@@ -288,10 +288,19 @@
     }
   }
 
+  // Sane defaults if the user empties a numeric field — otherwise an empty
+  // input parses to NaN → null over IPC → serde defaults to whatever the
+  // struct says, which has bitten us before (opacity silently went to 0).
+  const NUM_DEFAULTS = { overlay_opacity: 85, scale_pct: 100, poll_interval_sec: 300 };
+
   function collectConfig() {
     const cfg = {};
     for (const id of CHECKBOXES) cfg[id] = document.getElementById(id).checked;
-    for (const id of NUMBERS)   cfg[id] = parseInt(document.getElementById(id).value, 10);
+    for (const id of NUMBERS) {
+      let v = parseInt(document.getElementById(id).value, 10);
+      if (isNaN(v)) v = NUM_DEFAULTS[id];
+      cfg[id] = v;
+    }
     for (const id of STRINGS)   cfg[id] = document.getElementById(id).value;
     for (const id of COLORS)    cfg[id] = document.getElementById(id).value;
     return cfg;
