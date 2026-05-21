@@ -115,8 +115,9 @@ unsafe fn show() {
         null_mut(), null_mut(), instance, std::ptr::null(),
     );
     ShowWindow(HWND_OVERLAY, SW_SHOWNOACTIVATE);
-    // Kick off the re-assertion timer; the handler lives in wnd_proc.
-    SetTimer(HWND_OVERLAY, TIMER_TOPMOST, 500, None);
+    // 200ms re-assertion. 500ms was empirically too slow — the taskbar's own
+    // topmost cycle would beat us into the foreground gap.
+    SetTimer(HWND_OVERLAY, TIMER_TOPMOST, 200, None);
     render();
 }
 
@@ -499,14 +500,11 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             }
             WM_TIMER => {
                 if wp == TIMER_TOPMOST {
-                    // The conditional WS_EX_TOPMOST check turned out to skip
-                    // the case that actually mattered — the taskbar can paint
-                    // over us without clearing our flag. Re-assert
-                    // unconditionally (without SWP_SHOWWINDOW so we don't
-                    // trigger a redraw flash).
+                    // Match OverlayWindow.cs: include SWP_SHOWWINDOW so the
+                    // window is also reraised in z-order, not just flagged.
                     SetWindowPos(hwnd, HWND_TOPMOST,
                         0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 }
                 0
             }
