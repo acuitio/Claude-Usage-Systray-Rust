@@ -77,7 +77,9 @@ unsafe fn show() {
     // Initial size is a placeholder; render() resizes to fit the actual
     // measured token content on its first call.
     let (x, y) = if let (Some(cx), Some(cy)) = (cfg.widget_x, cfg.widget_y) {
-        (cx, cy)
+        // Validate the persisted position — if a previous session dragged
+        // the overlay off-screen, we don't want to restore it there.
+        clamp_to_virtual_screen(cx, cy, 240, 44)
     } else {
         let mut wa: RECT = std::mem::zeroed();
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut _ as *mut _, 0);
@@ -471,7 +473,13 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                         GetWindowRect(hwnd, &mut rc);
                         let dx = pt.x - DRAG_START.x;
                         let dy = pt.y - DRAG_START.y;
-                        SetWindowPos(hwnd, null_mut(), rc.left + dx, rc.top + dy, 0, 0,
+                        let w = rc.right - rc.left;
+                        let h = rc.bottom - rc.top;
+                        // Clamp so a grabbable strip always stays on a real
+                        // monitor — otherwise the user can lose the overlay
+                        // by dragging it past the screen edge.
+                        let (cx, cy) = clamp_to_virtual_screen(rc.left + dx, rc.top + dy, w, h);
+                        SetWindowPos(hwnd, null_mut(), cx, cy, 0, 0,
                                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
                         render();
                     }
@@ -514,4 +522,18 @@ fn lparam_to_point(lp: LPARAM) -> POINT {
         x: (lp & 0xffff) as i16 as i32,
         y: ((lp >> 16) & 0xffff) as i16 as i32,
     }
+}
+
+/// Make sure `(x, y)` lands inside the virtual screen (union of all monitors)
+/// with at least `MIN_VISIBLE` pixels of the window's edge poking into a real
+/// display, so the user can always grab and drag it back.
+unsafe fn clamp_to_virtual_screen(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
+    const MIN_VISIBLE: i32 = 40;
+    let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    let cx = x.clamp(vx + MIN_VISIBLE - w, vx + vw - MIN_VISIBLE);
+    let cy = y.clamp(vy, vy + vh - MIN_VISIBLE);
+    (cx, cy)
 }
