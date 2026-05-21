@@ -29,6 +29,7 @@ mod overlay;
 mod paths;
 mod settings;
 mod tray;
+mod tray_registry_patch;
 mod usage_cache;
 mod usage_history;
 
@@ -78,6 +79,11 @@ fn main() {
 
         tray::install(host);
 
+        // Schedule the registry self-patch ~1.5 s after the icon registers,
+        // matching the C# port. Windows writes the partial NotifyIconSettings
+        // entry lazily; the timer gives it time to land before we patch.
+        SetTimer(host, TIMER_PATCH, 1500, None);
+
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
@@ -88,6 +94,8 @@ fn main() {
     }
 }
 
+const TIMER_PATCH: usize = 1;
+
 extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         if msg == tray::WM_TRAY_CALLBACK {
@@ -95,6 +103,18 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             return 0;
         }
         match msg {
+            WM_TIMER => {
+                if wp == TIMER_PATCH {
+                    KillTimer(hwnd, TIMER_PATCH);
+                    if let Ok(exe) = std::env::current_exe() {
+                        tray_registry_patch::apply(
+                            &exe.to_string_lossy(),
+                            "Usage",
+                        );
+                    }
+                }
+                0
+            }
             WM_DESTROY => { PostQuitMessage(0); 0 }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
         }
