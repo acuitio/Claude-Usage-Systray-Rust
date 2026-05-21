@@ -19,6 +19,7 @@
 
 #![windows_subsystem = "windows"]
 
+mod chart;
 mod common;
 mod config_store;
 mod cooldown;
@@ -114,6 +115,7 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             tray::refresh();
             overlay::on_data_changed();
             dashboard::on_data_changed();
+            chart::on_data_changed();
             return 0;
         }
         match msg {

@@ -8,7 +8,7 @@ use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::common::*;
-use crate::{dashboard, overlay, settings};
+use crate::{chart, dashboard, overlay, settings};
 
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 
@@ -17,6 +17,7 @@ const ID_MENU_DASHBOARD: u16 = 9001;
 const ID_MENU_OVERLAY:   u16 = 9002;
 const ID_MENU_REFRESH:   u16 = 9003;
 const ID_MENU_SETTINGS:  u16 = 9004;
+const ID_MENU_CHART:     u16 = 9006;
 const ID_MENU_QUIT:      u16 = 9005;
 
 static mut TRAY_HWND: HWND = null_mut();
@@ -54,6 +55,9 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
             MF_STRING | if overlay_open { MF_CHECKED } else { MF_UNCHECKED },
             ID_MENU_OVERLAY as usize, w!("Overlay"));
         AppendMenuW(menu, MF_STRING, ID_MENU_REFRESH as usize, w!("Refresh Now"));
+        AppendMenuW(menu,
+            MF_STRING | if chart::is_open() { MF_CHECKED } else { MF_UNCHECKED },
+            ID_MENU_CHART as usize, w!("Usage Chart"));
         AppendMenuW(menu, MF_STRING, ID_MENU_SETTINGS as usize, w!("Settings"));
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, ID_MENU_QUIT as usize, w!("Quit"));
@@ -70,6 +74,7 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
             ID_MENU_DASHBOARD => dashboard::open(host),
             ID_MENU_OVERLAY   => overlay::toggle(host),
             ID_MENU_REFRESH   => { crate::poll_service::trigger_refresh(); }
+            ID_MENU_CHART     => chart::open(host),
             ID_MENU_SETTINGS  => settings::open(host),
             ID_MENU_QUIT      => { remove(); PostQuitMessage(0); }
             _ => {}
