@@ -314,12 +314,18 @@ unsafe fn render() {
         x += tok.width;
     }
 
-    // Step 1: knock the alpha of any pixel that's still the exact bg fill
-    //         colour down to `bg_a`. Everything GDI touched (text, dividers,
-    //         border, AA edges) keeps its alpha at 255 — fully opaque.
-    knock_bg_alpha(bits, (width * height) as usize, bg_pixel_full, bg_a);
+    // Reconcile alpha after GDI text drawing. GDI zeros the alpha byte of
+    // any pixel it writes on a 32bpp BI_RGB DIB (it treats the format as
+    // 24bpp + padding). So after the text pass, every text-affected pixel
+    // has alpha=0 — invisible on a layered window. Fix it up here:
+    //   - alpha < 255 → GDI touched it (text, dividers, AA fringes). Force
+    //     to fully opaque so it renders at full strength.
+    //   - alpha = 255 AND RGB matches the bg fill → untouched background;
+    //     apply the configured `bg_a` to make it translucent.
+    //   - alpha = 255 AND RGB ≠ bg → border pixel I painted myself; leave.
+    finalize_alpha(bits, (width * height) as usize, bg_pixel_full, bg_a);
 
-    // Step 2: premultiply RGB by alpha for ULW_ALPHA.
+    // Then premultiply RGB by alpha for ULW_ALPHA.
     premultiply_all(bits, (width * height) as usize);
 
     // Push to the layered window.
@@ -396,17 +402,23 @@ unsafe fn premultiply_all(bits: *mut c_void, count: usize) {
     }
 }
 
-/// Walk every pixel; if its RGB (low 24 bits) exactly matches `bg_full_pixel`,
-/// rewrite it with alpha = `bg_a` instead of 255. Everything else (text,
-/// divider lines, border, AA fringes) stays at 255 so opacity only affects
-/// the background fill, not the rendered content.
-unsafe fn knock_bg_alpha(bits: *mut c_void, count: usize, bg_full_pixel: u32, bg_a: u32) {
-    if bg_a >= 255 { return; }
+/// Walk every pixel, deciding its final alpha:
+///   - alpha < 255  → GDI wrote here (it zeroes the alpha byte on 32bpp
+///                    BI_RGB DIBs). Force to 255 so text/dividers render
+///                    fully opaque regardless of bg opacity.
+///   - alpha = 255 AND rgb = bg fill colour → background; assign `bg_a`.
+///   - alpha = 255 AND rgb ≠ bg fill colour → our own draws (border etc.);
+///                    leave as-is.
+unsafe fn finalize_alpha(bits: *mut c_void, count: usize, bg_full_pixel: u32, bg_a: u32) {
     let p = bits as *mut u32;
     let bg_rgb = bg_full_pixel & 0x00ff_ffff;
     for i in 0..count {
         let px = *p.add(i);
-        if (px & 0x00ff_ffff) == bg_rgb {
+        let a = (px >> 24) & 0xff;
+        let rgb = px & 0x00ff_ffff;
+        if a < 255 {
+            *p.add(i) = (255u32 << 24) | rgb;
+        } else if rgb == bg_rgb && bg_a < 255 {
             *p.add(i) = (bg_a << 24) | bg_rgb;
         }
     }
