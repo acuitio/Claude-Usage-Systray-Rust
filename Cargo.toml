@@ -26,12 +26,13 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
 ] }
 
+# JSON I/O for config / cache / history / cooldown / credentials.
+serde      = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
 # Future dependencies (commented until the corresponding feature lands):
 # reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-# serde        = { version = "1",    features = ["derive"] }
-# serde_json   = "1"
 # tokio        = { version = "1",    features = ["rt", "macros", "time"] }
-# atomicwrites = "0.4"
 
 # Optimize for minimum binary size in release.
 [profile.release]

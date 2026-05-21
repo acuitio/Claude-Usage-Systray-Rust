@@ -83,18 +83,92 @@ pub unsafe fn set_font(hwnd: HWND, font: HFONT) {
     SendMessageW(hwnd, WM_SETFONT, font as WPARAM, 1);
 }
 
-// ─── Dummy usage data (a real port would call the Anthropic API) ──────
+// ─── Current usage snapshot — reads cache + credentials ───────────────
+// Falls back to zeros + "Unknown" plan if no cache yet. The HTTP layer
+// (future work) populates the cache; UI just reads it.
+
 pub struct UsageData {
     pub session_pct: f64,
     pub weekly_pct:  f64,
     pub sonnet_pct:  f64,
-    pub session_reset: &'static str,
-    pub weekly_reset:  &'static str,
+    pub session_reset_iso: Option<String>,
+    pub weekly_reset_iso:  Option<String>,
+    pub extra: Option<crate::models::ExtraUsage>,
+    pub plan:  String,
 }
 
-pub fn dummy_usage() -> UsageData {
-    UsageData {
-        session_pct: 29.0, weekly_pct: 11.0, sonnet_pct: 0.0,
-        session_reset: "3h 14m", weekly_reset: "4d 2h 14m",
+pub fn current_snapshot() -> UsageData {
+    let plan = crate::credentials::plan_label(
+        crate::credentials::read_full().as_ref());
+
+    match crate::usage_cache::load().and_then(|c| c.data) {
+        Some(d) => UsageData {
+            session_pct: d.five_hour.as_ref().map(|m| m.utilization).unwrap_or(0.0),
+            weekly_pct:  d.seven_day.as_ref().map(|m| m.utilization).unwrap_or(0.0),
+            sonnet_pct:  d.seven_day_sonnet.as_ref().map(|m| m.utilization).unwrap_or(0.0),
+            session_reset_iso: d.five_hour.as_ref().and_then(|m| m.resets_at.clone()),
+            weekly_reset_iso:  d.seven_day.as_ref().and_then(|m| m.resets_at.clone()),
+            extra: d.extra_usage,
+            plan,
+        },
+        None => UsageData {
+            session_pct: 0.0, weekly_pct: 0.0, sonnet_pct: 0.0,
+            session_reset_iso: None, weekly_reset_iso: None,
+            extra: None, plan,
+        },
     }
 }
+
+/// "Resets in 3h 14m" style — accepts an ISO 8601 timestamp string.
+/// Returns "—" if missing, "unknown" if unparsable. Minimal hand-rolled
+/// parser to avoid pulling in the chrono crate for this one feature.
+pub fn format_reset(iso: Option<&str>) -> String {
+    let Some(iso) = iso else { return "—".into() };
+    let core = iso.split('.').next().unwrap_or(iso);
+    let parts: Vec<&str> = core.split('T').collect();
+    if parts.len() != 2 { return "unknown".into(); }
+    let dparts: Vec<&str> = parts[0].split('-').collect();
+    let time = parts[1].trim_end_matches('Z');
+    let tparts: Vec<&str> = time.split(':').collect();
+    if dparts.len() != 3 || tparts.len() < 2 { return "unknown".into(); }
+    let (Ok(y), Ok(mo), Ok(d), Ok(hr), Ok(mn)) = (
+        dparts[0].parse::<i32>(), dparts[1].parse::<u32>(), dparts[2].parse::<u32>(),
+        tparts[0].parse::<u32>(), tparts[1].parse::<u32>(),
+    ) else { return "unknown".into() };
+    let target = unix_from_ymdhm(y, mo, d, hr, mn);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let delta = (target - now).max(0);
+    let total_min = delta / 60;
+    let h = total_min / 60;
+    let m = total_min % 60;
+    if h >= 24 {
+        let days = h / 24;
+        let h = h % 24;
+        format!("{days}d {h}h {m}m")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else {
+        format!("{m}m")
+    }
+}
+
+// Naive UTC date → unix-seconds (Gregorian, sufficient for 2026+).
+fn unix_from_ymdhm(y: i32, mo: u32, d: u32, h: u32, mn: u32) -> i64 {
+    let mut days: i64 = 0;
+    for year in 1970..y {
+        days += if is_leap(year) { 366 } else { 365 };
+    }
+    let mdays = if is_leap(y) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    for m in 0..(mo as usize).saturating_sub(1).min(12) { days += mdays[m]; }
+    days += d as i64 - 1;
+    days * 86_400 + (h as i64) * 3600 + (mn as i64) * 60
+}
+
+fn is_leap(y: i32) -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }

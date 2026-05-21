@@ -92,22 +92,26 @@ unsafe fn paint(hwnd: HWND) {
     SetTextColor(hdc, FG_LIGHT);
     SelectObject(hdc, FONT_REG as HGDIOBJ);
 
-    let usage = dummy_usage();
+    let usage = current_snapshot();
     let pad = 28;
     let mut y = 24;
 
-    // Header line: plan + "Updated Xs ago"
+    // Header line: plan
     SelectObject(hdc, FONT_BOLD as HGDIOBJ);
-    let header_txt = wstr("Claude Pro Max  ·  Updated 24s ago");
+    let header_txt = wstr(&usage.plan);
     let rc_hdr = RECT { left: pad, top: y, right: rc.right - pad, bottom: y + 22 };
     DrawTextW(hdc, header_txt.as_ptr(), -1, &rc_hdr as *const _ as *mut _,
               DT_LEFT | DT_TOP | DT_SINGLELINE);
     y += 26;
 
-    // Subtitle: email
+    // Subtitle: "Cache age: …" or "No usage data yet" if cache missing
     SelectObject(hdc, FONT_REG as HGDIOBJ);
     SetTextColor(hdc, 0x00b0_b0b0);
-    let sub = wstr("user@example.com");
+    let sub_text = match crate::usage_cache::load() {
+        Some(c) => format!("Cache age: {}s", c.age_seconds as i64),
+        None    => "No usage data yet — waiting for first fetch.".into(),
+    };
+    let sub = wstr(&sub_text);
     let rc_sub = RECT { left: pad, top: y, right: rc.right - pad, bottom: y + 20 };
     DrawTextW(hdc, sub.as_ptr(), -1, &rc_sub as *const _ as *mut _,
               DT_LEFT | DT_TOP | DT_SINGLELINE);
@@ -121,10 +125,12 @@ unsafe fn paint(hwnd: HWND) {
     y += 14;
 
     // Three bars
+    let session_reset = crate::common::format_reset(usage.session_reset_iso.as_deref());
+    let weekly_reset  = crate::common::format_reset(usage.weekly_reset_iso.as_deref());
     for (label, pct, reset) in [
-        ("Session (5-hour)",   usage.session_pct, usage.session_reset),
-        ("Weekly (All Models)", usage.weekly_pct,  usage.weekly_reset),
-        ("Weekly (Sonnet)",     usage.sonnet_pct,  usage.weekly_reset),
+        ("Session (5-hour)",    usage.session_pct, session_reset.as_str()),
+        ("Weekly (All Models)", usage.weekly_pct,  weekly_reset.as_str()),
+        ("Weekly (Sonnet)",     usage.sonnet_pct,  weekly_reset.as_str()),
     ] {
         y = draw_bar(hdc, pad, y, rc.right - 2 * pad, label, pct, reset);
         y += 18;

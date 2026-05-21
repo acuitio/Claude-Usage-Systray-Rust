@@ -96,7 +96,7 @@ unsafe fn render() {
     // Draw the formatted percentages with GDI text on top
     let old_font = SelectObject(hdc_mem, FONT_BOLD as HGDIOBJ);
     SetBkMode(hdc_mem, TRANSPARENT as i32);
-    let usage = dummy_usage();
+    let usage = current_snapshot();
     let txt = wstr(&format!("{:.0}%  |  {:.0}%  |  {:.0}%",
                             usage.session_pct, usage.weekly_pct, usage.sonnet_pct));
     SetTextColor(hdc_mem, FG_LIGHT);

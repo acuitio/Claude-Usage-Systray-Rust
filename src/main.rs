@@ -20,10 +20,17 @@
 #![windows_subsystem = "windows"]
 
 mod common;
+mod config_store;
+mod cooldown;
+mod credentials;
 mod dashboard;
+mod models;
 mod overlay;
+mod paths;
 mod settings;
 mod tray;
+mod usage_cache;
+mod usage_history;
 
 use std::ptr::null_mut;
 use windows_sys::w;

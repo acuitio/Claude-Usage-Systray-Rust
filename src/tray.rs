@@ -24,7 +24,8 @@ static mut TRAY_HWND: HWND = null_mut();
 pub unsafe fn install(host: HWND) {
     TRAY_HWND = host;
 
-    let icon = build_tray_icon(29.0);
+    let usage = current_snapshot();
+    let icon = build_tray_icon(usage.session_pct);
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
     nid.hWnd = host;
@@ -32,8 +33,11 @@ pub unsafe fn install(host: HWND) {
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAY_CALLBACK;
     nid.hIcon = icon;
-    // Tooltip: "Usage: X% | Y% | Z%\n<plan>" — same as the C# version.
-    let tip = wstr("Usage: 29% | 11% | 0%\nClaude Pro Max");
+    let tip_str = format!(
+        "Usage: {:.0}% | {:.0}% | {:.0}%\n{}",
+        usage.session_pct, usage.weekly_pct, usage.sonnet_pct, usage.plan,
+    );
+    let tip = wstr(&tip_str);
     for (i, c) in tip.iter().take(127).enumerate() {
         nid.szTip[i] = *c;
     }
