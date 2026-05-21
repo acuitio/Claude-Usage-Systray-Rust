@@ -33,6 +33,9 @@ static mut DRAGGING: bool = false;
 static mut DRAG_START: POINT = POINT { x: 0, y: 0 };
 
 const MK_LBUTTON: u32 = 0x0001;
+/// Re-assert HWND_TOPMOST every 500ms so the overlay can't slip under the
+/// taskbar (which is itself a topmost window). Mirrors OverlayWindow.cs.
+const TIMER_TOPMOST: usize = 1;
 
 pub unsafe fn is_open() -> bool {
     !HWND_OVERLAY.is_null() && IsWindow(HWND_OVERLAY) != 0
@@ -91,6 +94,8 @@ unsafe fn show() {
         null_mut(), null_mut(), instance, std::ptr::null(),
     );
     ShowWindow(HWND_OVERLAY, SW_SHOWNOACTIVATE);
+    // Kick off the re-assertion timer; the handler lives in wnd_proc.
+    SetTimer(HWND_OVERLAY, TIMER_TOPMOST, 500, None);
     render();
 }
 
@@ -486,7 +491,16 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                 DRAGGING = false;
                 0
             }
+            WM_TIMER => {
+                if wp == TIMER_TOPMOST {
+                    SetWindowPos(hwnd, HWND_TOPMOST,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                }
+                0
+            }
             WM_DESTROY => {
+                KillTimer(hwnd, TIMER_TOPMOST);
                 HWND_OVERLAY = null_mut();
                 0
             }
