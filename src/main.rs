@@ -94,6 +94,9 @@ fn main() {
         // back to the host window on every successful fetch.
         poll_service::start(host);
 
+        // Restore overlay if it was open last session.
+        overlay::open_if_persisted();
+
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);

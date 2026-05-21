@@ -46,10 +46,29 @@ pub unsafe fn on_data_changed() {
 }
 
 pub unsafe fn toggle(_owner: HWND) {
-    if is_open() {
+    let now_open = if is_open() {
         DestroyWindow(HWND_OVERLAY);
         HWND_OVERLAY = null_mut();
+        false
     } else {
+        show();
+        true
+    };
+    // Persist the choice via `display_mode` so the overlay re-opens on the
+    // next launch (mirrors OverlayWindow.cs).
+    let mut cfg = crate::config_store::load();
+    let new_mode = if now_open { "overlay" } else { "tray" };
+    if cfg.display_mode != new_mode {
+        cfg.display_mode = new_mode.to_string();
+        let _ = crate::config_store::save(&cfg);
+    }
+}
+
+/// Open the overlay without flipping `display_mode` — for the startup
+/// auto-restore path where the persisted state already says it should be open.
+pub unsafe fn open_if_persisted() {
+    let cfg = crate::config_store::load();
+    if cfg.display_mode == "overlay" && !is_open() {
         show();
     }
 }
