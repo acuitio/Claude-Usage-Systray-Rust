@@ -1,7 +1,7 @@
-// Load/save the most-recent Anthropic usage API response, so the UI has
-// something to show on launch before the first live fetch.
+// Thin shim over state_store. Loads/saves the `cache` slice of the
+// combined AppState file.
 
-use crate::{models::*, paths};
+use crate::{models::*, state_store};
 
 pub struct LoadedCache {
     pub data: Option<UsageResponse>,
@@ -9,10 +9,7 @@ pub struct LoadedCache {
 }
 
 pub fn load() -> Option<LoadedCache> {
-    let path = paths::cache();
-    if !path.exists() { return None; }
-    let bytes = std::fs::read(&path).ok()?;
-    let env: CacheEnvelope = serde_json::from_slice(&bytes).ok()?;
+    let env = state_store::load().cache?;
     let age = unix_now() - env.ts;
     Some(LoadedCache { data: env.data, age_seconds: age })
 }
@@ -23,13 +20,7 @@ pub fn save(data: Option<&UsageResponse>, refresh_iso: &str) -> std::io::Result<
         data: data.cloned(),
         refresh: Some(refresh_iso.to_string()),
     };
-    let path = paths::cache();
-    let tmp = path.with_extension("json.tmp");
-    let json = serde_json::to_vec_pretty(&env)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    state_store::update(|s| s.cache = Some(env))
 }
 
 fn unix_now() -> f64 {

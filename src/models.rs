@@ -163,6 +163,16 @@ pub struct CooldownState {
     #[serde(default)] pub cooldown_until: f64,
 }
 
+/// Single on-disk file combining settings, last API response, and rate-limit
+/// cooldown. History is kept separate because it grows over time and can be
+/// safely deleted without affecting app behaviour.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AppState {
+    #[serde(default)] pub config:   AppConfig,
+    #[serde(default)] pub cache:    Option<CacheEnvelope>,
+    #[serde(default)] pub cooldown: CooldownState,
+}
+
 // History is stored as `[[ts, sp, wp, snp], ...]` — a plain Vec<[f64; 4]>
 // serializes/deserializes to exactly that shape via serde.
 pub type UsageHistory = Vec<[f64; 4]>;

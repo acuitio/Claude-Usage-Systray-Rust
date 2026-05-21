@@ -32,11 +32,13 @@ mod paths;
 mod poll_service;
 mod settings;
 mod startup_registry;
+mod state_store;
 mod tray;
 mod tray_registry_patch;
 mod usage_cache;
 mod usage_fetcher;
 mod usage_history;
+mod webview2_install;
 mod webview_host;
 
 use std::ptr::null_mut;
@@ -56,6 +58,12 @@ fn main() {
             dwICC:  ICC_STANDARD_CLASSES | ICC_UPDOWN_CLASS,
         };
         InitCommonControlsEx(&icc);
+
+        // Make sure WebView2 Runtime is available before the tray icon
+        // surfaces — the dashboard/settings/chart windows can't open without
+        // it. On Windows 11 this returns immediately (WebView2 is built in);
+        // on Windows 10 it pops a one-time install dialog.
+        let _ = webview2_install::ensure_installed();
 
         common::init_resources();
 

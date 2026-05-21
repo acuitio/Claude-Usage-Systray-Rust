@@ -1,23 +1,16 @@
-// Multi-process safe shared cooldown. Both the (future) app and collector
-// read/write usage_ratelimit.json; "longest cooldown wins" merge logic.
+// Thin shim over state_store. Loads/saves the `cooldown` slice of the
+// combined AppState file. "Longest cooldown wins" merge logic so two
+// concurrent rate-limit hits don't shorten each other's wait.
 
-use crate::{models::CooldownState, paths};
+use crate::{models::CooldownState, state_store};
 
 pub const DEFAULT_SEC: i32 = 600;
 pub const SHORT_SEC: i32   = 120;
 pub const MAX_SEC: i32     = 3600;
 
 pub fn remaining_seconds() -> i32 {
-    let path = paths::cooldown();
-    if !path.exists() { return 0; }
-    let state: CooldownState = match std::fs::read(&path) {
-        Ok(b) => match serde_json::from_slice(&b) {
-            Ok(s)  => s,
-            Err(_) => return 0,
-        },
-        Err(_) => return 0,
-    };
-    let remain = state.cooldown_until - unix_now();
+    let state = state_store::load();
+    let remain = state.cooldown.cooldown_until - unix_now();
     if remain <= 0.0 { 0 } else { remain as i32 }
 }
 
@@ -29,24 +22,11 @@ pub fn engage(retry_after: Option<&str>, default_sec: i32) -> std::io::Result<()
         }
     }
     wait = wait.min(MAX_SEC);
-
     let new_until = unix_now() + wait as f64;
-    let existing = match std::fs::read(paths::cooldown()) {
-        Ok(b) => serde_json::from_slice::<CooldownState>(&b)
-            .map(|s| s.cooldown_until)
-            .unwrap_or(0.0),
-        Err(_) => 0.0,
-    };
-    let final_until = new_until.max(existing);
-
-    let path = paths::cooldown();
-    let tmp = path.with_extension("json.tmp");
-    let state = CooldownState { cooldown_until: final_until };
-    let json = serde_json::to_vec_pretty(&state)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    state_store::update(|s| {
+        let final_until = new_until.max(s.cooldown.cooldown_until);
+        s.cooldown = CooldownState { cooldown_until: final_until };
+    })
 }
 
 pub fn format(seconds: i32) -> String {

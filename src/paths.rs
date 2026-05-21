@@ -11,10 +11,17 @@ pub fn app_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-pub fn config()        -> PathBuf { app_dir().join("config.json") }
-pub fn cache()         -> PathBuf { app_dir().join("usage_cache.json") }
+/// Single combined file: settings + last API response + cooldown.
+pub fn state()         -> PathBuf { app_dir().join("app_state.json") }
+/// Time-series history. Kept separate — it grows over time and is the only
+/// runtime file safe to delete (the chart just starts empty again).
 pub fn history()       -> PathBuf { app_dir().join("usage_history.json") }
-pub fn cooldown()      -> PathBuf { app_dir().join("usage_ratelimit.json") }
+
+// Legacy paths from the pre-consolidation layout — read once on first run
+// for migration, then deleted.
+pub fn legacy_config()   -> PathBuf { app_dir().join("config.json") }
+pub fn legacy_cache()    -> PathBuf { app_dir().join("usage_cache.json") }
+pub fn legacy_cooldown() -> PathBuf { app_dir().join("usage_ratelimit.json") }
 
 /// `~/.claude/.credentials.json`. Absolute, NOT relative to the exe.
 pub fn credentials() -> PathBuf {
