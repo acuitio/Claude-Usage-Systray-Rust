@@ -53,13 +53,20 @@ unsafe fn show() {
     };
     RegisterClassExW(&wc);
 
-    // Anchor above the taskbar, screen-centered horizontally
-    let mut wa: RECT = std::mem::zeroed();
-    SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut _ as *mut _, 0);
+    // Restore last drag position from config if present, else default to
+    // screen-bottom-centered above the taskbar.
+    let cfg = crate::config_store::load();
     let w = 240;
     let h = 44;
-    let x = ((wa.right - wa.left) - w) / 2 + wa.left;
-    let y = wa.bottom - h - 40;
+    let (x, y) = if let (Some(cx), Some(cy)) = (cfg.widget_x, cfg.widget_y) {
+        (cx, cy)
+    } else {
+        let mut wa: RECT = std::mem::zeroed();
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut _ as *mut _, 0);
+        let cx = ((wa.right - wa.left) - w) / 2 + wa.left;
+        let cy = wa.bottom - h - 40;
+        (cx, cy)
+    };
 
     HWND_OVERLAY = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
@@ -172,6 +179,15 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             }
             WM_LBUTTONUP => {
                 ReleaseCapture();
+                if DRAGGING {
+                    // Persist new position so it sticks across launches.
+                    let mut rc: RECT = std::mem::zeroed();
+                    GetWindowRect(hwnd, &mut rc);
+                    let mut cfg = crate::config_store::load();
+                    cfg.widget_x = Some(rc.left);
+                    cfg.widget_y = Some(rc.top);
+                    let _ = crate::config_store::save(&cfg);
+                }
                 DRAGGING = false;
                 0
             }
