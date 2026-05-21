@@ -266,17 +266,20 @@ unsafe fn render() {
     let bmp = CreateDIBSection(hdc_mem, &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
     let old_bmp = SelectObject(hdc_mem, bmp as HGDIOBJ);
 
-    // Background fill — premultiplied alpha.
+    // Background + border are filled NON-premultiplied so GDI text (which
+    // writes raw RGB without touching alpha) composes naturally on top.
+    // A single post-pass premultiplies everything at the end. Without this,
+    // AA edges between text and background end up with mismatched RGB↔A
+    // pairs and visibly alias.
     let opacity = cfg.overlay_opacity.clamp(0, 100) as u32;
     let bg_a = (opacity * 255 / 100).max(1);
     let bg_col = hex_to_colorref(&cfg.bg_color).unwrap_or(0x002e_1e1e);
-    let bg_pixel = bgra_pixel(bg_col, bg_a);
+    let bg_pixel = nopremul_bgra(bg_col, bg_a);
     fill_bgra(bits, (width * height) as usize, bg_pixel);
 
-    // Border at 3× the bg opacity, capped at 255.
     let border_a = (opacity * 255 / 100 * 3).min(255);
     if border_a > 0 {
-        let border_pixel = bgra_pixel(0x006c_4a4a, border_a);
+        let border_pixel = nopremul_bgra(0x006c_4a4a, border_a);
         draw_border(bits, width, height, border_pixel);
     }
 
@@ -306,12 +309,11 @@ unsafe fn render() {
         x += tok.width;
     }
 
-    // GDI text on a layered DIB leaves alpha at 0. Walk the bitmap and
-    // promote any pixel that GDI touched (RGB changed from the bg fill)
-    // up to full alpha. Imperfect — anti-aliased text fringes lose their
-    // gradient — but matches what a quick GDI-only port can do without
-    // dragging in GDI+ / Direct2D.
-    fix_text_alpha(bits, width, height, bg_pixel);
+    // Premultiply every pixel in one pass. Background, border, and text all
+    // get their alpha baked into the RGB channels as ULW_ALPHA requires.
+    // GDI didn't touch the A channel during text drawing, so text pixels
+    // already have the surrounding bg_a — we just need to scale RGB by it.
+    premultiply_all(bits, (width * height) as usize);
 
     // Push to the layered window.
     let blend = BLENDFUNCTION {
@@ -338,33 +340,48 @@ unsafe fn render() {
 
 unsafe fn make_overlay_font(family: &str, em_size_px: i32, weight: i32) -> HFONT {
     let face = wstr(family);
-    // Negative nHeight = the absolute value is the character (em-square) height
-    // in pixels. Positive would be the cell height, which makes glyphs ~75%
-    // of the requested size — that's what made the Rust overlay look smaller
-    // than the C# one, which uses GraphicsUnit.Pixel (≡ negative nHeight).
+    // Negative nHeight = em-size in pixels (positive would be cell height).
+    // ANTIALIASED_QUALITY (grayscale AA) instead of CLEARTYPE_QUALITY because
+    // ClearType's subpixel RGB hinting produces colored fringes once we
+    // alpha-blend onto a translucent background.
     CreateFontW(
         -em_size_px, 0, 0, 0, weight,
         0, 0, 0,
         DEFAULT_CHARSET as u32,
         OUT_DEFAULT_PRECIS as u32,
         CLIP_DEFAULT_PRECIS as u32,
-        CLEARTYPE_QUALITY as u32,
+        ANTIALIASED_QUALITY as u32,
         (DEFAULT_PITCH | FF_DONTCARE) as u32,
         face.as_ptr(),
     )
 }
 
-/// Build a 0xAARRGGBB pixel with premultiplied RGB. Note that on a DIB
-/// the channel order is actually BGRA in memory; our u32 layout here is
-/// `(A << 24) | (B << 16) | (G << 8) | R` so a raw memcpy lands correctly.
-fn bgra_pixel(colorref: u32, alpha: u32) -> u32 {
+/// Non-premultiplied BGRA pixel. The DIB stores bytes in order B,G,R,A;
+/// our u32 layout is `(A << 24) | (B << 16) | (G << 8) | R` to match.
+fn nopremul_bgra(colorref: u32, alpha: u32) -> u32 {
     let r = colorref & 0xff;
     let g = (colorref >> 8) & 0xff;
     let b = (colorref >> 16) & 0xff;
-    (alpha << 24) | (premul(b, alpha) << 16) | (premul(g, alpha) << 8) | premul(r, alpha)
+    (alpha << 24) | (b << 16) | (g << 8) | r
 }
 
 fn premul(component: u32, alpha: u32) -> u32 { component * alpha / 255 }
+
+unsafe fn premultiply_all(bits: *mut c_void, count: usize) {
+    let p = bits as *mut u32;
+    for i in 0..count {
+        let px = *p.add(i);
+        let a = (px >> 24) & 0xff;
+        if a == 0 || a == 0xff { continue; }
+        let b = (px >> 16) & 0xff;
+        let g = (px >> 8) & 0xff;
+        let r = px & 0xff;
+        *p.add(i) = (a << 24)
+            | (premul(b, a) << 16)
+            | (premul(g, a) << 8)
+            | premul(r, a);
+    }
+}
 
 unsafe fn fill_bgra(bits: *mut c_void, count: usize, pixel: u32) {
     let p = bits as *mut u32;
@@ -384,27 +401,6 @@ unsafe fn draw_border(bits: *mut c_void, w: i32, h: i32, pixel: u32) {
     }
 }
 
-unsafe fn fix_text_alpha(bits: *mut c_void, w: i32, h: i32, bg_pixel: u32) {
-    let p = bits as *mut u32;
-    let n = (w * h) as usize;
-    for i in 0..n {
-        let px = *p.add(i);
-        // Pixels that still match the background fill are background. Others
-        // were touched by GDI (text, divider lines) — give them full alpha
-        // and treat their RGB as straight (non-premultiplied) since GDI
-        // wrote raw color values.
-        if px != bg_pixel && (px & 0xff_ff_ff) != 0 {
-            let r = px & 0xff;
-            let g = (px >> 8) & 0xff;
-            let b = (px >> 16) & 0xff;
-            let a = 0xffu32;
-            *p.add(i) = (a << 24)
-                | (premul(b, a) << 16)
-                | (premul(g, a) << 8)
-                | premul(r, a);
-        }
-    }
-}
 
 // ─── Window proc ─────────────────────────────────────────────────────
 

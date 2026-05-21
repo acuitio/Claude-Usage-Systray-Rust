@@ -82,6 +82,11 @@ unsafe fn attach_webview(parent_hwnd: HWND) {
     let result = wry::WebViewBuilder::new_as_child(&parent)
         .with_html(DASHBOARD_HTML)
         .with_ipc_handler(handle_ipc)
+        .with_on_page_load_handler(|_event, _url| {
+            // Belt-and-braces: even if the "ready" IPC racing the WebView
+            // initialization gets dropped, page-load always fires.
+            push_snapshot();
+        })
         .with_transparent(false)
         .build();
 
