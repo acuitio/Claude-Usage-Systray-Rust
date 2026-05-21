@@ -89,6 +89,10 @@ fn main() {
         // entry lazily; the timer gives it time to land before we patch.
         SetTimer(host, TIMER_PATCH, 1500, None);
 
+        // If the user opted into background_collection, spawn the headless
+        // ClaudeUsageCollector.exe that lives alongside us.
+        try_spawn_collector();
+
         // Kick off the background polling thread. It posts WM_USAGE_UPDATED
         // back to the host window on every successful fetch.
         poll_service::start(host);
@@ -104,6 +108,22 @@ fn main() {
 }
 
 const TIMER_PATCH: usize = 1;
+
+fn try_spawn_collector() {
+    let cfg = config_store::load();
+    if !cfg.background_collection { return; }
+    let Ok(self_exe) = std::env::current_exe() else { return; };
+    let Some(dir) = self_exe.parent() else { return; };
+    let collector = dir.join("ClaudeUsageCollector.exe");
+    if !collector.exists() {
+        eprintln!("collector exe not found at {} — skipping spawn", collector.display());
+        return;
+    }
+    match std::process::Command::new(&collector).spawn() {
+        Ok(child) => eprintln!("spawned ClaudeUsageCollector (PID {})", child.id()),
+        Err(e)    => eprintln!("collector spawn failed: {e}"),
+    }
+}
 
 extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
