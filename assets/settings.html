@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<style>
+  :root {
+    --bg:        #1a1a2e;
+    --surface:   #1e1e1e;
+    --raised:    #252525;
+    --border:    #333333;
+    --fg:        #ffffff;
+    --fg-dim:    #b0b0b0;
+    --fg-faint:  #888888;
+    --accent:    #56d4c8;
+    --green:     #3fb950;
+    --red:       #f85149;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  .container {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px 22px 0;
+  }
+
+  .section {
+    margin-bottom: 18px;
+  }
+  .section h3 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.1px;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 0;
+    gap: 12px;
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 4px 0;
+    user-select: none;
+  }
+  .check input { cursor: pointer; }
+
+  .note {
+    color: var(--fg-faint);
+    font-size: 11px;
+    margin-top: 4px;
+    margin-left: 22px;
+  }
+
+  hr.sep {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 14px 0;
+  }
+
+  label.field-label {
+    flex: 1;
+  }
+
+  select, input[type=text], input[type=number] {
+    background: var(--surface);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 6px 8px;
+    font-family: inherit;
+    font-size: 13px;
+    width: 180px;
+  }
+  input[type=text].wide { width: 320px; }
+  input[type=number] { width: 90px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  input[type=color] {
+    width: 80px; height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--surface);
+    cursor: pointer;
+    padding: 0;
+  }
+  .hex-readout {
+    color: var(--fg-dim);
+    font-family: ui-monospace, "Cascadia Mono", monospace;
+    font-size: 11px;
+    margin-left: 6px;
+  }
+
+  /* Bottom button row */
+  .buttons {
+    border-top: 1px solid var(--border);
+    padding: 12px 22px;
+    background: var(--bg);
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  button {
+    background: var(--raised);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    font-family: inherit;
+    font-size: 13px;
+    border-radius: 4px;
+    cursor: pointer;
+    min-width: 90px;
+  }
+  button:hover  { background: #2e2e2e; }
+  button:active { background: var(--surface); }
+  button.primary { color: var(--green); }
+  button.danger  { background: #aa0000; border-color: #aa0000; color: white; }
+  button.danger:hover { background: #c40000; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="scroll">
+
+    <div class="section">
+      <h3>General</h3>
+      <label class="check"><input type="checkbox" id="start_on_startup">       Launch widget on Windows startup</label>
+      <label class="check"><input type="checkbox" id="dashboard_on_top">       Dashboard always on top</label>
+      <label class="check"><input type="checkbox" id="auto_refresh_token">     Auto-refresh OAuth token (Path 1)</label>
+      <div class="note">Path 1: widget refreshes its own token near expiry, avoiding 401 blips.</div>
+    </div>
+
+    <hr class="sep">
+
+    <div class="section">
+      <h3>Display Mode</h3>
+      <div class="row">
+        <label class="field-label" for="display_mode">Mode</label>
+        <select id="display_mode">
+          <option value="tray">tray</option>
+          <option value="overlay">overlay</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="field-label" for="overlay_opacity">Overlay opacity (0–100)</label>
+        <input type="number" id="overlay_opacity" min="0" max="100">
+      </div>
+      <div class="row">
+        <label class="field-label" for="scale_pct">Display scale (1–400)</label>
+        <input type="number" id="scale_pct" min="1" max="400">
+      </div>
+    </div>
+
+    <hr class="sep">
+
+    <div class="section">
+      <h3>Refresh</h3>
+      <div class="row">
+        <label class="field-label" for="poll_interval_sec">Interval (seconds, 1–1800)</label>
+        <input type="number" id="poll_interval_sec" min="1" max="1800">
+      </div>
+      <div class="row">
+        <label class="field-label" for="refresh_display_mode">Display mode</label>
+        <select id="refresh_display_mode">
+          <option value="exact">exact</option>
+          <option value="approximate">approximate</option>
+        </select>
+      </div>
+    </div>
+
+    <hr class="sep">
+
+    <div class="section">
+      <h3>Overlay Format</h3>
+      <input type="text" class="wide" id="overlay_format" style="width:100%">
+      <div class="note">Placeholders: {session} {weekly} {sonnet} {s_reset} {w_reset}. Use <code>|</code> for vertical divider.</div>
+    </div>
+
+    <hr class="sep">
+
+    <div class="section">
+      <h3>Display Options</h3>
+      <label class="check"><input type="checkbox" id="show_session">           Show Session (5-hour)</label>
+      <label class="check"><input type="checkbox" id="show_weekly">            Show Weekly (All Models)</label>
+      <label class="check"><input type="checkbox" id="show_sonnet">            Show Weekly (Sonnet)</label>
+      <label class="check"><input type="checkbox" id="show_depletion_estimates">Show depletion estimates under each bar</label>
+      <label class="check"><input type="checkbox" id="show_last_refresh">      Display "Time since last refresh"</label>
+
+      <div class="row" style="margin-top:8px">
+        <label class="field-label" for="font_family">Font family</label>
+        <select id="font_family">
+          <option>Segoe UI</option>
+          <option>Segoe UI Variable</option>
+          <option>Bahnschrift</option>
+          <option>Cascadia Mono</option>
+          <option>Calibri</option>
+          <option>Tahoma</option>
+          <option>Verdana</option>
+          <option>Arial</option>
+          <option>Consolas</option>
+          <option>Cambria</option>
+        </select>
+      </div>
+    </div>
+
+    <hr class="sep">
+
+    <div class="section">
+      <h3>Colors</h3>
+      <div class="row">
+        <label class="field-label" for="bg_color">Background</label>
+        <div><input type="color" id="bg_color"><span class="hex-readout" id="bg_color_hex"></span></div>
+      </div>
+      <div class="row">
+        <label class="field-label" for="color_text">Text</label>
+        <div><input type="color" id="color_text"><span class="hex-readout" id="color_text_hex"></span></div>
+      </div>
+      <div class="row">
+        <label class="field-label" for="color_sufficient">Sufficient (&lt;50%)</label>
+        <div><input type="color" id="color_sufficient"><span class="hex-readout" id="color_sufficient_hex"></span></div>
+      </div>
+      <div class="row">
+        <label class="field-label" for="color_partial">Partial (50–90%)</label>
+        <div><input type="color" id="color_partial"><span class="hex-readout" id="color_partial_hex"></span></div>
+      </div>
+      <div class="row">
+        <label class="field-label" for="color_depleted">Depleted (≥90%)</label>
+        <div><input type="color" id="color_depleted"><span class="hex-readout" id="color_depleted_hex"></span></div>
+      </div>
+    </div>
+
+    <div style="height:8px"></div>
+  </div>
+
+  <div class="buttons">
+    <button class="danger" onclick="resetDefaults()">Reset to Defaults</button>
+    <div style="display:flex; gap:8px">
+      <button onclick="cancel()">Cancel</button>
+      <button onclick="apply()">Apply</button>
+      <button class="primary" onclick="saveAndExit()">Save &amp; Exit</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Field lists — names must match AppConfig field names (Rust serde rename
+  // → JSON keys → these ids).
+  const CHECKBOXES = [
+    'start_on_startup', 'dashboard_on_top', 'auto_refresh_token',
+    'show_session', 'show_weekly', 'show_sonnet',
+    'show_depletion_estimates', 'show_last_refresh',
+  ];
+  const NUMBERS  = ['overlay_opacity', 'scale_pct', 'poll_interval_sec'];
+  const STRINGS  = ['display_mode', 'refresh_display_mode', 'overlay_format', 'font_family'];
+  const COLORS   = ['bg_color', 'color_text', 'color_sufficient', 'color_partial', 'color_depleted'];
+
+  function applyConfig(cfg) {
+    for (const id of CHECKBOXES) document.getElementById(id).checked = !!cfg[id];
+    for (const id of NUMBERS)   document.getElementById(id).value   = cfg[id];
+    for (const id of STRINGS)   document.getElementById(id).value   = cfg[id];
+    for (const id of COLORS) {
+      const v = cfg[id] || '#000000';
+      document.getElementById(id).value = v;
+      document.getElementById(id + '_hex').textContent = v.toLowerCase();
+    }
+  }
+
+  function collectConfig() {
+    const cfg = {};
+    for (const id of CHECKBOXES) cfg[id] = document.getElementById(id).checked;
+    for (const id of NUMBERS)   cfg[id] = parseInt(document.getElementById(id).value, 10);
+    for (const id of STRINGS)   cfg[id] = document.getElementById(id).value;
+    for (const id of COLORS)    cfg[id] = document.getElementById(id).value;
+    return cfg;
+  }
+
+  function apply() {
+    window.chrome?.webview?.postMessage({ cmd: 'apply', cfg: collectConfig() });
+  }
+  function saveAndExit() {
+    window.chrome?.webview?.postMessage({ cmd: 'save_exit', cfg: collectConfig() });
+  }
+  function cancel() {
+    window.chrome?.webview?.postMessage({ cmd: 'cancel' });
+  }
+  function resetDefaults() {
+    if (confirm('Reset all settings to defaults?')) {
+      window.chrome?.webview?.postMessage({ cmd: 'reset_defaults' });
+    }
+  }
+
+  // Wire color picker → hex readout updates
+  for (const id of ['bg_color', 'color_text', 'color_sufficient', 'color_partial', 'color_depleted']) {
+    document.getElementById(id).addEventListener('input', e => {
+      document.getElementById(id + '_hex').textContent = e.target.value.toLowerCase();
+    });
+  }
+
+  window.applyConfig = applyConfig;
+  window.chrome?.webview?.postMessage({ cmd: 'ready' });
+</script>
+</body>
+</html>

@@ -27,7 +27,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::common::*;
 use crate::models::AppConfig;
-use crate::settings::hex_to_colorref;
 
 static mut HWND_OVERLAY: HWND = null_mut();
 static mut DRAGGING: bool = false;

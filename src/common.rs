@@ -58,6 +58,16 @@ pub fn color_hex(c: u32) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
+/// Parse "#RRGGBB" → COLORREF (0x00BBGGRR). Returns None on malformed input.
+pub fn hex_to_colorref(s: &str) -> Option<u32> {
+    let s = s.trim_start_matches('#');
+    if s.len() != 6 { return None; }
+    let r = u32::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u32::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u32::from_str_radix(&s[4..6], 16).ok()?;
+    Some(r | (g << 8) | (b << 16))
+}
+
 pub fn pct_color(pct: f64) -> u32 {
     if pct < 50.0 { GREEN }
     else if pct < 90.0 { YELLOW }
