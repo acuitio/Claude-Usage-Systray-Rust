@@ -44,6 +44,7 @@ mod webview_host;
 use std::ptr::null_mut;
 use windows_sys::w;
 use windows_sys::Win32::Foundation::*;
+use windows_sys::Win32::Graphics::GdiPlus::{GdiplusStartup, GdiplusStartupInput};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::*;
 use windows_sys::Win32::UI::Controls::*;
@@ -58,6 +59,18 @@ fn main() {
             dwICC:  ICC_STANDARD_CLASSES | ICC_UPDOWN_CLASS,
         };
         InitCommonControlsEx(&icc);
+
+        // Initialize GDI+. We use it for overlay text rendering so AA edges
+        // get proper alpha (raw GDI on a layered DIB can't write the alpha
+        // channel — looks weak/chunky compared to GDI+).
+        let mut gdip_token: usize = 0;
+        let gdip_input = GdiplusStartupInput {
+            GdiplusVersion: 1,
+            DebugEventCallback: 0,
+            SuppressBackgroundThread: 0,
+            SuppressExternalCodecs: 0,
+        };
+        GdiplusStartup(&mut gdip_token, &gdip_input, std::ptr::null_mut());
 
         // Make sure WebView2 Runtime is available before the tray icon
         // surfaces — the dashboard/settings/chart windows can't open without

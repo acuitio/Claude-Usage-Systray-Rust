@@ -1,6 +1,7 @@
 // Layered-window overlay. Per-pixel-alpha bitmap pushed via UpdateLayeredWindow.
-// Ports both src/App/OverlayWindow.cs (window lifecycle, drag) and
-// OverlayRenderer.cs (token parsing, layout, colors, opacity, font).
+// Text is rendered via GDI+ (TextRenderingHint::AntiAlias + SmoothingMode::AntiAlias),
+// so AA fringes get proper per-pixel alpha — matches OverlayRenderer.cs in the
+// .NET port.
 //
 // The overlay reads every visual property from config.json on each render:
 //   - overlay_format            — placeholders + literal text + "|" dividers
@@ -9,18 +10,13 @@
 //   - color_text                — plain text & dividers
 //   - color_sufficient/partial/depleted — percentage tokens, by threshold
 //   - widget_x / widget_y       — restored position
-//
-// Known limitation: raw GDI DrawText into a DIB writes RGB but leaves the
-// alpha channel at 0. On a layered window that means text pixels render as
-// "transparent over the background color we filled," which looks slightly
-// muddier than the C# version's GDI+ rendering. The trade for staying off
-// GDI+ / Direct2D is a much smaller binary. Acceptable for a tray widget.
 
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows_sys::w;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
+use windows_sys::Win32::Graphics::GdiPlus::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -33,9 +29,14 @@ static mut DRAGGING: bool = false;
 static mut DRAG_START: POINT = POINT { x: 0, y: 0 };
 
 const MK_LBUTTON: u32 = 0x0001;
-/// Re-assert HWND_TOPMOST every 500ms so the overlay can't slip under the
-/// taskbar (which is itself a topmost window). Mirrors OverlayWindow.cs.
+/// Re-assert HWND_TOPMOST every 200ms so the overlay can't slip under the
+/// taskbar (which is itself a topmost window).
 const TIMER_TOPMOST: usize = 1;
+
+// GDI+ pixel format for the DIB-backed bitmap. PARGB = premultiplied ARGB,
+// which is what UpdateLayeredWindow expects — letting GDI+ do the multiplication
+// for us means we don't need a post-render pass.
+const PIXEL_FORMAT_32BPP_PARGB: i32 = 0x0e200b;
 
 pub unsafe fn is_open() -> bool {
     !HWND_OVERLAY.is_null() && IsWindow(HWND_OVERLAY) != 0
@@ -54,8 +55,6 @@ pub unsafe fn toggle(_owner: HWND) {
         show();
         true
     };
-    // Persist the choice via `display_mode` so the overlay re-opens on the
-    // next launch (mirrors OverlayWindow.cs).
     let mut cfg = crate::config_store::load();
     let new_mode = if now_open { "overlay" } else { "tray" };
     if cfg.display_mode != new_mode {
@@ -65,7 +64,7 @@ pub unsafe fn toggle(_owner: HWND) {
 }
 
 /// Open the overlay without flipping `display_mode` — for the startup
-/// auto-restore path where the persisted state already says it should be open.
+/// auto-restore path.
 pub unsafe fn open_if_persisted() {
     let cfg = crate::config_store::load();
     if cfg.display_mode == "overlay" && !is_open() {
@@ -93,11 +92,7 @@ unsafe fn show() {
     RegisterClassExW(&wc);
 
     let cfg = crate::config_store::load();
-    // Initial size is a placeholder; render() resizes to fit the actual
-    // measured token content on its first call.
     let (x, y) = if let (Some(cx), Some(cy)) = (cfg.widget_x, cfg.widget_y) {
-        // Validate the persisted position — if a previous session dragged
-        // the overlay off-screen, we don't want to restore it there.
         clamp_to_virtual_screen(cx, cy, 240, 44)
     } else {
         let mut wa: RECT = std::mem::zeroed();
@@ -115,8 +110,6 @@ unsafe fn show() {
         null_mut(), null_mut(), instance, std::ptr::null(),
     );
     ShowWindow(HWND_OVERLAY, SW_SHOWNOACTIVATE);
-    // 200ms re-assertion. 500ms was empirically too slow — the taskbar's own
-    // topmost cycle would beat us into the foreground gap.
     SetTimer(HWND_OVERLAY, TIMER_TOPMOST, 200, None);
     render();
 }
@@ -126,20 +119,22 @@ unsafe fn show() {
 #[derive(Clone, Copy, PartialEq)]
 enum TokenKind { Text, Div }
 
+#[derive(Clone, Copy, PartialEq)]
+enum FontStyle { Main, Sep }
+
 struct OverlayToken {
     kind: TokenKind,
     text: String,
-    font: HFONT,   // not owned by token; freed at end of render()
+    style: FontStyle,
     color: u32,    // COLORREF
     width: i32,    // filled in during measure pass
+    height: i32,   // ditto
 }
 
-unsafe fn build_tokens(
+fn build_tokens(
     fmt: &str,
     cfg: &AppConfig,
     usage: &UsageData,
-    font_main: HFONT,
-    font_sep: HFONT,
     text_color: u32,
 ) -> Vec<OverlayToken> {
     let mut tokens = Vec::new();
@@ -151,17 +146,17 @@ unsafe fn build_tokens(
         if bytes[i] == b'{' {
             if let Some(rel_close) = fmt[i + 1..].find('}') {
                 if i > text_start {
-                    emit_plain(&fmt[text_start..i], &mut tokens, font_sep, text_color);
+                    emit_plain(&fmt[text_start..i], &mut tokens, text_color);
                 }
                 let key = &fmt[i + 1..i + 1 + rel_close];
                 let (display, pct_color) = placeholder_value(key, usage, cfg);
                 let has_color = pct_color.is_some();
                 tokens.push(OverlayToken {
-                    kind: TokenKind::Text,
-                    text: if has_color { display.to_uppercase() } else { display },
-                    font: if has_color { font_main } else { font_sep },
+                    kind:  TokenKind::Text,
+                    text:  if has_color { display.to_uppercase() } else { display },
+                    style: if has_color { FontStyle::Main } else { FontStyle::Sep },
                     color: pct_color.unwrap_or(text_color),
-                    width: 0,
+                    width: 0, height: 0,
                 });
                 i = i + 1 + rel_close + 1;
                 text_start = i;
@@ -171,29 +166,29 @@ unsafe fn build_tokens(
         i += 1;
     }
     if text_start < fmt.len() {
-        emit_plain(&fmt[text_start..], &mut tokens, font_sep, text_color);
+        emit_plain(&fmt[text_start..], &mut tokens, text_color);
     }
     tokens
 }
 
-unsafe fn emit_plain(plain: &str, out: &mut Vec<OverlayToken>, font: HFONT, color: u32) {
+fn emit_plain(plain: &str, out: &mut Vec<OverlayToken>, color: u32) {
     let parts: Vec<&str> = plain.split('|').collect();
     let count = parts.len();
     for (i, part) in parts.iter().enumerate() {
         if !part.is_empty() {
             out.push(OverlayToken {
-                kind: TokenKind::Text,
-                text: part.to_uppercase(),
-                font, color,
-                width: 0,
+                kind:  TokenKind::Text,
+                text:  part.to_uppercase(),
+                style: FontStyle::Sep,
+                color, width: 0, height: 0,
             });
         }
         if i < count - 1 {
             out.push(OverlayToken {
-                kind: TokenKind::Div,
-                text: String::new(),
-                font, color,
-                width: 0,
+                kind:  TokenKind::Div,
+                text:  String::new(),
+                style: FontStyle::Sep,
+                color, width: 0, height: 0,
             });
         }
     }
@@ -224,46 +219,49 @@ unsafe fn render() {
     let cfg = crate::config_store::load();
     let usage = current_snapshot();
 
-    // Fonts scaled per config.
-    let scale = (cfg.scale_pct.max(1) as f64) / 100.0;
-    let main_size = ((11.0 * scale * 4.0 / 3.0) as i32).max(9);
-    let sep_size  = ((10.0 * scale * 4.0 / 3.0) as i32).max(8);
-    let font_main = make_overlay_font(&cfg.font_family, main_size, FW_BOLD as i32);
-    let font_sep  = make_overlay_font(&cfg.font_family, sep_size,  FW_NORMAL as i32);
+    // Font sizes scaled per config — same formula as the .NET port: em-size
+    // in pixels = base * scale * 4/3, with sensible floors.
+    let scale = (cfg.scale_pct.max(1) as f32) / 100.0;
+    let main_em = (11.0 * scale * 4.0 / 3.0).max(9.0);
+    let sep_em  = (10.0 * scale * 4.0 / 3.0).max(8.0);
 
     let text_color = hex_to_colorref(&cfg.color_text).unwrap_or(0x00ff_ffff);
-    let mut tokens = build_tokens(&cfg.overlay_format, &cfg, &usage, font_main, font_sep, text_color);
+    let mut tokens = build_tokens(&cfg.overlay_format, &cfg, &usage, text_color);
 
-    let div_w = (scale as i32).max(1);
+    let div_w   = ((scale as i32) * 1).max(1);
     let div_gap = ((4.0 * scale) as i32).max(3);
 
-    // Measure pass — using a temp DC + bitmap so GetTextExtentPoint32W has
-    // the font selected.
-    let hdc_screen = GetDC(null_mut());
-    let hdc_mem = CreateCompatibleDC(hdc_screen);
-    let tmp_bmp = CreateCompatibleBitmap(hdc_screen, 1, 1);
-    let old_bmp_measure = SelectObject(hdc_mem, tmp_bmp as HGDIOBJ);
+    // ── GDI+ font + format setup (used for both measure and draw) ───────
+    let family = create_font_family(&cfg.font_family);
+    let font_main = create_font(family, main_em, FontStyleBold);
+    let font_sep  = create_font(family, sep_em,  FontStyleRegular);
+    let sf        = create_string_format();
 
+    // We need a Graphics for measuring even before the bitmap exists.
+    // GDI+ requires a real device context here.
+    let hdc_screen = GetDC(null_mut());
+    let mut g_measure: *mut GpGraphics = null_mut();
+    GdipCreateFromHDC(hdc_screen, &mut g_measure);
+    GdipSetTextRenderingHint(g_measure, TextRenderingHintAntiAlias);
+
+    // ── Measure pass ────────────────────────────────────────────────────
     let mut content_w = 0;
     let mut content_h = 0;
     for tok in &mut tokens {
         if tok.kind == TokenKind::Div {
             tok.width = div_w + div_gap * 2;
         } else {
-            SelectObject(hdc_mem, tok.font as HGDIOBJ);
-            let w16 = wstr(&tok.text);
-            let mut sz: SIZE = std::mem::zeroed();
-            // w16.len() includes trailing null — subtract 1.
-            GetTextExtentPoint32W(hdc_mem, w16.as_ptr(), (w16.len() - 1) as i32, &mut sz);
-            tok.width = sz.cx;
-            content_h = content_h.max(sz.cy);
+            let font = if tok.style == FontStyle::Main { font_main } else { font_sep };
+            let (tw, th) = measure_string(g_measure, &tok.text, font, sf);
+            tok.width  = tw.ceil() as i32;
+            tok.height = th.ceil() as i32;
+            content_h = content_h.max(tok.height);
         }
         content_w += tok.width;
     }
     content_h = content_h.max((12.0 * scale) as i32);
 
-    SelectObject(hdc_mem, old_bmp_measure);
-    DeleteObject(tmp_bmp as HGDIOBJ);
+    GdipDeleteGraphics(g_measure);
 
     let pad_x: i32 = 10;
     let pad_y: i32 = 5;
@@ -280,7 +278,11 @@ unsafe fn render() {
         GetWindowRect(HWND_OVERLAY, &mut rc);
     }
 
-    // ARGB DIB section. biHeight negative → top-down so y=0 is the top row.
+    // ── DIB section + GDI+ bitmap ───────────────────────────────────────
+    // Top-down BI_RGB 32bpp; we'll let GDI+ interpret the memory as
+    // PixelFormat32bppPARGB so it writes premultiplied alpha directly —
+    // ready for UpdateLayeredWindow with ULW_ALPHA.
+    let hdc_mem = CreateCompatibleDC(hdc_screen);
     let mut bi: BITMAPINFO = std::mem::zeroed();
     bi.bmiHeader.biSize        = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
     bi.bmiHeader.biWidth       = width;
@@ -292,25 +294,36 @@ unsafe fn render() {
     let bmp = CreateDIBSection(hdc_mem, &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
     let old_bmp = SelectObject(hdc_mem, bmp as HGDIOBJ);
 
-    // Opacity should affect the *background only*. So we fill bg with full
-    // alpha here, render text + dividers + border at full alpha (GDI text
-    // doesn't touch the A channel, so it inherits whatever the fill set),
-    // and then in a post-pass we knock the alpha of any pixel that's still
-    // exactly the bg color down to `bg_a` — leaving every GDI-touched
-    // pixel fully opaque.
+    let mut gp_bitmap: *mut GpBitmap = null_mut();
+    GdipCreateBitmapFromScan0(
+        width, height,
+        width * 4,  // stride in bytes
+        PIXEL_FORMAT_32BPP_PARGB,
+        bits as *mut u8,
+        &mut gp_bitmap,
+    );
+
+    let mut g: *mut GpGraphics = null_mut();
+    GdipGetImageGraphicsContext(gp_bitmap as *mut GpImage, &mut g);
+    GdipSetTextRenderingHint(g, TextRenderingHintAntiAlias);
+    GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+    GdipSetCompositingMode(g, CompositingModeSourceOver);
+
+    // Start with a fully transparent surface (alpha=0 everywhere).
+    GdipGraphicsClear(g, 0);
+
+    // ── Background fill ────────────────────────────────────────────────
     let opacity = cfg.overlay_opacity.clamp(0, 100) as u32;
     let bg_a = (opacity * 255 / 100).max(1);
     let bg_col = hex_to_colorref(&cfg.bg_color).unwrap_or(0x002e_1e1e);
-    let bg_pixel_full = nopremul_bgra(bg_col, 255);
-    fill_bgra(bits, (width * height) as usize, bg_pixel_full);
+    let bg_argb = colorref_to_argb(bg_col, bg_a as u8);
 
-    // For finalize_alpha: the largest channel-distance any token's text
-    // colour can have from the bg. We use this to recover anti-aliased
-    // coverage from GDI's RGB-only output (see comment in finalize_alpha).
-    let max_text_dist = compute_max_text_dist(&tokens, bg_col);
+    let mut bg_brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(bg_argb, &mut bg_brush);
+    GdipFillRectangleI(g, bg_brush as *mut GpBrush, 0, 0, width, height);
+    GdipDeleteBrush(bg_brush as *mut GpBrush);
 
-    // Token pass — text & dividers.
-    SetBkMode(hdc_mem, TRANSPARENT as i32);
+    // ── Tokens — text and dividers ──────────────────────────────────────
     let div_h = content_h * 60 / 100;
     let div_top = pad_y + 1 + (content_h - div_h) / 2;
     let div_bot = div_top + div_h - 1;
@@ -319,28 +332,33 @@ unsafe fn render() {
 
     for tok in &tokens {
         if tok.kind == TokenKind::Div {
-            let pen = CreatePen(PS_SOLID as i32, div_w, text_color);
-            let old_pen = SelectObject(hdc_mem, pen as HGDIOBJ);
-            let lx = x + div_gap;
-            MoveToEx(hdc_mem, lx, div_top, null_mut());
-            LineTo(hdc_mem, lx, div_bot);
-            SelectObject(hdc_mem, old_pen);
-            DeleteObject(pen as HGDIOBJ);
+            let div_argb = colorref_to_argb(text_color, 0xB4); // ~70% alpha
+            let mut pen: *mut GpPen = null_mut();
+            GdipCreatePen1(div_argb, div_w as f32, UnitPixel, &mut pen);
+            let lx = (x + div_gap) as f32 + 0.5; // half-pixel for crisp 1px line
+            GdipDrawLine(g, pen, lx, div_top as f32, lx, div_bot as f32);
+            GdipDeletePen(pen);
         } else {
-            SelectObject(hdc_mem, tok.font as HGDIOBJ);
-            SetTextColor(hdc_mem, tok.color);
-            let w16 = wstr(&tok.text);
-            TextOutW(hdc_mem, x, y_base, w16.as_ptr(), (w16.len() - 1) as i32);
+            let font = if tok.style == FontStyle::Main { font_main } else { font_sep };
+            let argb = colorref_to_argb(tok.color, 0xFF);
+            let mut brush: *mut GpSolidFill = null_mut();
+            GdipCreateSolidFill(argb, &mut brush);
+            let text_wide = wstr(&tok.text);
+            let layout = RectF {
+                X: x as f32, Y: y_base as f32,
+                Width: tok.width as f32 + 4.0,
+                Height: tok.height as f32 + 4.0,
+            };
+            GdipDrawString(
+                g, text_wide.as_ptr(), (text_wide.len() - 1) as i32,
+                font, &layout, sf, brush as *mut GpBrush,
+            );
+            GdipDeleteBrush(brush as *mut GpBrush);
         }
         x += tok.width;
     }
 
-    finalize_alpha(bits, (width * height) as usize, bg_pixel_full, bg_a, max_text_dist);
-
-    // Then premultiply RGB by alpha for ULW_ALPHA.
-    premultiply_all(bits, (width * height) as usize);
-
-    // Push to the layered window.
+    // ── Push to the layered window ──────────────────────────────────────
     let blend = BLENDFUNCTION {
         BlendOp:             AC_SRC_OVER as u8,
         BlendFlags:          0,
@@ -354,143 +372,79 @@ unsafe fn render() {
         &mut pt_dst, &mut sz, hdc_mem, &mut pt_src,
         0, &blend, ULW_ALPHA);
 
-    // Clean up.
+    // ── Cleanup ─────────────────────────────────────────────────────────
+    GdipDeleteGraphics(g);
+    GdipDisposeImage(gp_bitmap as *mut GpImage);
+    GdipDeleteFont(font_main);
+    GdipDeleteFont(font_sep);
+    GdipDeleteFontFamily(family);
+    GdipDeleteStringFormat(sf);
+
     SelectObject(hdc_mem, old_bmp);
     DeleteObject(bmp as HGDIOBJ);
-    DeleteObject(font_main as HGDIOBJ);
-    DeleteObject(font_sep as HGDIOBJ);
     DeleteDC(hdc_mem);
     ReleaseDC(null_mut(), hdc_screen);
 }
 
-unsafe fn make_overlay_font(family: &str, em_size_px: i32, weight: i32) -> HFONT {
-    let face = wstr(family);
-    // Negative nHeight = em-size in pixels (positive would be cell height).
-    // ANTIALIASED_QUALITY (grayscale AA) instead of CLEARTYPE_QUALITY because
-    // ClearType's subpixel RGB hinting produces colored fringes once we
-    // alpha-blend onto a translucent background.
-    CreateFontW(
-        -em_size_px, 0, 0, 0, weight,
-        0, 0, 0,
-        DEFAULT_CHARSET as u32,
-        OUT_DEFAULT_PRECIS as u32,
-        CLIP_DEFAULT_PRECIS as u32,
-        ANTIALIASED_QUALITY as u32,
-        (DEFAULT_PITCH | FF_DONTCARE) as u32,
-        face.as_ptr(),
-    )
+// ─── GDI+ helpers ─────────────────────────────────────────────────────
+
+/// Look up a font family by name, falling back to Segoe UI if the user's
+/// configured font isn't installed.
+unsafe fn create_font_family(name: &str) -> *mut GpFontFamily {
+    let wname = wstr(name);
+    let mut family: *mut GpFontFamily = null_mut();
+    if GdipCreateFontFamilyFromName(wname.as_ptr(), null_mut(), &mut family) == 0 {
+        return family;
+    }
+    let fallback = wstr("Segoe UI");
+    GdipCreateFontFamilyFromName(fallback.as_ptr(), null_mut(), &mut family);
+    family
 }
 
-/// Non-premultiplied BGRA pixel for the 32bpp BI_RGB DIB. Memory layout is
-/// B, G, R, A → byte 0 to byte 3. In a little-endian u32 that means B is in
-/// the LOW byte (bits 0..7), R is at bits 16..23.
-///
-/// COLORREF format (what hex_to_colorref returns) is `0x00BBGGRR` — R in
-/// the low byte. We have to flip R and B as we move from COLORREF into the
-/// DIB layout; getting this wrong shows up as everything being rendered
-/// with red and blue swapped.
-fn nopremul_bgra(colorref: u32, alpha: u32) -> u32 {
+unsafe fn create_font(family: *mut GpFontFamily, em_px: f32, style: i32) -> *mut GpFont {
+    let mut font: *mut GpFont = null_mut();
+    GdipCreateFont(family, em_px, style, UnitPixel, &mut font);
+    font
+}
+
+/// GenericTypographic + MeasureTrailingSpaces — same as the .NET port. The
+/// typographic preset gives tighter measurements (no extra leading); the
+/// trailing-spaces flag keeps inter-token gaps from collapsing during measure.
+unsafe fn create_string_format() -> *mut GpStringFormat {
+    // 0x800 = StringFormatFlagsMeasureTrailingSpaces.
+    // 0x1000 = StringFormatFlagsNoWrap — single line, no width-based wrapping.
+    // 0x4000 = StringFormatFlagsNoClip — don't clip to layout rect.
+    let mut sf: *mut GpStringFormat = null_mut();
+    let mut generic: *mut GpStringFormat = null_mut();
+    GdipStringFormatGetGenericTypographic(&mut generic);
+    GdipCloneStringFormat(generic, &mut sf);
+    let mut flags: i32 = 0;
+    GdipGetStringFormatFlags(sf, &mut flags);
+    GdipSetStringFormatFlags(sf, flags | 0x800 | 0x1000 | 0x4000);
+    sf
+}
+
+unsafe fn measure_string(
+    g: *mut GpGraphics, text: &str, font: *mut GpFont, sf: *mut GpStringFormat,
+) -> (f32, f32) {
+    let text_wide = wstr(text);
+    let layout = RectF { X: 0.0, Y: 0.0, Width: 100_000.0, Height: 100_000.0 };
+    let mut bounds = RectF { X: 0.0, Y: 0.0, Width: 0.0, Height: 0.0 };
+    let mut cp = 0i32;
+    let mut lines = 0i32;
+    GdipMeasureString(
+        g, text_wide.as_ptr(), (text_wide.len() - 1) as i32,
+        font, &layout, sf, &mut bounds, &mut cp, &mut lines,
+    );
+    (bounds.Width, bounds.Height)
+}
+
+/// COLORREF (`0x00BBGGRR`, R in low byte) → GDI+ ARGB i32 (`0xAARRGGBB`).
+fn colorref_to_argb(colorref: u32, alpha: u8) -> u32 {
     let r = colorref & 0xff;
     let g = (colorref >> 8) & 0xff;
     let b = (colorref >> 16) & 0xff;
-    (alpha << 24) | (r << 16) | (g << 8) | b
-}
-
-fn premul(component: u32, alpha: u32) -> u32 { component * alpha / 255 }
-
-unsafe fn premultiply_all(bits: *mut c_void, count: usize) {
-    let p = bits as *mut u32;
-    for i in 0..count {
-        let px = *p.add(i);
-        let a = (px >> 24) & 0xff;
-        if a == 0 || a == 0xff { continue; }
-        let b = (px >> 16) & 0xff;
-        let g = (px >> 8) & 0xff;
-        let r = px & 0xff;
-        *p.add(i) = (a << 24)
-            | (premul(b, a) << 16)
-            | (premul(g, a) << 8)
-            | premul(r, a);
-    }
-}
-
-/// Reconcile alpha after GDI text drawing.
-///
-/// GDI zeros the alpha byte of any pixel it writes on a 32bpp BI_RGB DIB
-/// (it treats the format as 24bpp + padding). After the text pass:
-///   - pixels with alpha=255 are untouched background fill;
-///   - pixels with alpha=0 are GDI-drawn (text body, divider lines, and
-///     anti-aliased fringes at glyph edges).
-///
-/// GDI+ in the .NET port writes correct per-pixel alpha during text
-/// rendering, so AA fringe pixels there have intermediate alpha and blend
-/// smoothly. We approximate that by inferring "coverage" from the colour
-/// blend GDI left behind:
-///
-///     px = lerp(bg, text, cov)  ⟹  cov = |px - bg| / |text - bg|
-///
-/// Since multiple text colours coexist in one bitmap, we use the largest
-/// such distance across tokens (`max_text_dist`) as the normaliser. This
-/// is exact for the highest-contrast token and a small underestimate for
-/// lower-contrast ones — which only makes their fringes slightly more
-/// transparent, never less.
-///
-/// Final alpha per pixel:
-///   - untouched bg:   `bg_a` (so opacity affects bg only)
-///   - text/divider:   `lerp(bg_a, 255, cov)` — full opacity at core,
-///                     proportional partial opacity at AA edges.
-unsafe fn finalize_alpha(
-    bits: *mut c_void, count: usize,
-    bg_full_pixel: u32, bg_a: u32, max_text_dist: i32,
-) {
-    let p = bits as *mut u32;
-    let bg_b = (bg_full_pixel & 0xff)         as i32;
-    let bg_g = ((bg_full_pixel >> 8)  & 0xff) as i32;
-    let bg_r = ((bg_full_pixel >> 16) & 0xff) as i32;
-    let max_d = max_text_dist.max(1) as f64;
-    for i in 0..count {
-        let px  = *p.add(i);
-        let a   = (px >> 24) & 0xff;
-        let rgb = px & 0x00ff_ffff;
-        if a == 255 {
-            // Untouched bg fill — apply the configured background opacity.
-            if bg_a < 255 {
-                *p.add(i) = (bg_a << 24) | rgb;
-            }
-        } else {
-            // GDI touched this pixel. Infer coverage from channel distance.
-            let pb = (px & 0xff)         as i32;
-            let pg = ((px >> 8)  & 0xff) as i32;
-            let pr = ((px >> 16) & 0xff) as i32;
-            let d = (pb - bg_b).abs().max((pg - bg_g).abs()).max((pr - bg_r).abs());
-            let cov  = (d as f64 / max_d).min(1.0);
-            let new_a = (bg_a as f64 + cov * (255.0 - bg_a as f64)) as u32;
-            *p.add(i) = (new_a << 24) | rgb;
-        }
-    }
-}
-
-/// Largest per-channel distance between any token's text colour and the
-/// background. Used by `finalize_alpha` to normalise AA coverage.
-fn compute_max_text_dist(tokens: &[OverlayToken], bg_col: u32) -> i32 {
-    // COLORREF is 0x00BBGGRR — R in low byte.
-    let bg_r = (bg_col & 0xff)         as i32;
-    let bg_g = ((bg_col >> 8)  & 0xff) as i32;
-    let bg_b = ((bg_col >> 16) & 0xff) as i32;
-    let mut max = 1i32;
-    for tok in tokens {
-        let tr = (tok.color & 0xff)         as i32;
-        let tg = ((tok.color >> 8)  & 0xff) as i32;
-        let tb = ((tok.color >> 16) & 0xff) as i32;
-        let d = (tr - bg_r).abs().max((tg - bg_g).abs()).max((tb - bg_b).abs());
-        max = max.max(d);
-    }
-    max
-}
-
-unsafe fn fill_bgra(bits: *mut c_void, count: usize, pixel: u32) {
-    let p = bits as *mut u32;
-    for i in 0..count { *p.add(i) = pixel; }
+    ((alpha as u32) << 24) | (r << 16) | (g << 8) | b
 }
 
 // ─── Window proc ─────────────────────────────────────────────────────
@@ -518,9 +472,6 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                         let dy = pt.y - DRAG_START.y;
                         let w = rc.right - rc.left;
                         let h = rc.bottom - rc.top;
-                        // Clamp so a grabbable strip always stays on a real
-                        // monitor — otherwise the user can lose the overlay
-                        // by dragging it past the screen edge.
                         let (cx, cy) = clamp_to_virtual_screen(rc.left + dx, rc.top + dy, w, h);
                         SetWindowPos(hwnd, null_mut(), cx, cy, 0, 0,
                                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -544,8 +495,6 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             }
             WM_TIMER => {
                 if wp == TIMER_TOPMOST {
-                    // Match OverlayWindow.cs: include SWP_SHOWWINDOW so the
-                    // window is also reraised in z-order, not just flagged.
                     SetWindowPos(hwnd, HWND_TOPMOST,
                         0, 0, 0, 0,
                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -553,9 +502,6 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                 0
             }
             WM_WINDOWPOSCHANGING => {
-                // Intercept any z-order change and force ourselves back to
-                // the topmost slot. This catches transitions the timer might
-                // otherwise miss.
                 let pos = lp as *mut WINDOWPOS;
                 if !pos.is_null() && ((*pos).flags & SWP_NOZORDER) == 0 {
                     (*pos).hwndInsertAfter = HWND_TOPMOST;
@@ -579,14 +525,11 @@ fn lparam_to_point(lp: LPARAM) -> POINT {
     }
 }
 
-/// Make sure `(x, y)` lands fully inside the *full monitor area* of whichever
-/// monitor it's closest to. We use the monitor bounds, not the work area, so
-/// the user can position the overlay over the taskbar's footprint — z-order
-/// (topmost re-assertion + WM_WINDOWPOSCHANGING) keeps it visually above.
+/// Clamp `(x, y)` to the full-monitor area of whichever monitor it's
+/// closest to. We use rcMonitor (not rcWork) so the user can drag the
+/// overlay over the taskbar's footprint; the topmost re-assertion timer
+/// keeps it visually above.
 unsafe fn clamp_to_virtual_screen(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
-    use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
-    };
     let pt = POINT { x: x + w / 2, y: y + h / 2 };
     let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
     let mut mi: MONITORINFO = std::mem::zeroed();
@@ -594,7 +537,6 @@ unsafe fn clamp_to_virtual_screen(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) 
     let rc = if GetMonitorInfoW(monitor, &mut mi) != 0 {
         mi.rcMonitor
     } else {
-        // Fallback: primary monitor metrics.
         RECT {
             left: 0, top: 0,
             right:  GetSystemMetrics(SM_CXSCREEN),
