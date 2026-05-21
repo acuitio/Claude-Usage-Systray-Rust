@@ -35,6 +35,11 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # vs. rustls. No tokio required since it's blocking.
 ureq = { version = "2.10", features = ["json"] }
 
+# WebView2 host for the dashboard / settings / chart surfaces. Lets us
+# render those windows as HTML/CSS instead of raw GDI. WebView2 Runtime
+# ships with Windows 11; on older Windows the user installs it once.
+wry = { version = "0.45", default-features = false, features = ["protocol"] }
+
 # Optimize for minimum binary size in release.
 [profile.release]
 opt-level     = "z"

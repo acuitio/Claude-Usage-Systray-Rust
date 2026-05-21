@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dashboard</title>
+<style>
+  /* ── Palette (matches AppConfig defaults) ─────────────────────── */
+  :root {
+    --bg:        #1a1a2e;
+    --surface:   #1e1e1e;
+    --raised:    #252525;
+    --border:    #333333;
+    --fg:        #ffffff;
+    --fg-dim:    #b0b0b0;
+    --fg-faint:  #888888;
+    --accent:    #56d4c8;
+    --green:     #3fb950;
+    --yellow:    #e6c832;
+    --red:       #f85149;
+    --bar-bg:    #30363d;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%; width: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .container {
+    padding: 18px 22px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-y: auto;
+  }
+
+  /* ── Header ───────────────────────────────────────────────────── */
+  .header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .plan {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.1px;
+  }
+  .updated {
+    font-size: 11px;
+    color: var(--fg-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .email {
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+
+  hr.sep {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0;
+  }
+
+  /* ── Bars ─────────────────────────────────────────────────────── */
+  .bar-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .bar-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .bar-label {
+    font-size: 13px;
+  }
+  .bar-pct {
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .bar-pct.suf  { color: var(--green); }
+  .bar-pct.par  { color: var(--yellow); }
+  .bar-pct.dep  { color: var(--red); }
+
+  .bar-track {
+    height: 5px;
+    background: var(--bar-bg);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    transition: width 250ms ease;
+  }
+  .bar-fill.suf { background: var(--green); }
+  .bar-fill.par { background: var(--yellow); }
+  .bar-fill.dep { background: var(--red); }
+
+  .bar-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--fg-dim);
+    margin-top: 4px;
+  }
+  .bar-eta {
+    font-size: 11px;
+    color: var(--fg-faint);
+    margin-top: 2px;
+  }
+  .bar-eta.warn { color: var(--red); }
+
+  /* ── Extra usage ──────────────────────────────────────────────── */
+  .extra-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .extra-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: baseline;
+    gap: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+  .extra-used { color: var(--fg-dim); }
+  .extra-pct  { font-weight: 600; }
+  .extra-left {
+    color: var(--fg-dim);
+    text-align: right;
+  }
+  .extra-left.empty { color: var(--red); }
+
+  .extra-disabled {
+    color: var(--fg-dim);
+    font-size: 12px;
+  }
+  .extra-link {
+    color: #58a6ff;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .extra-note {
+    color: #b35c55;
+    font-size: 11px;
+    margin-top: 6px;
+  }
+
+  /* ── Refresh button ───────────────────────────────────────────── */
+  .refresh-row {
+    margin-top: auto;
+    padding-top: 8px;
+  }
+  button.refresh {
+    width: 100%;
+    background: var(--raised);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 10px;
+    font-family: inherit;
+    font-size: 13px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 100ms ease;
+  }
+  button.refresh:hover  { background: #2e2e2e; }
+  button.refresh:active { background: var(--surface); }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div>
+      <div class="plan"  id="plan">—</div>
+      <div class="email" id="email"></div>
+    </div>
+    <div class="updated" id="updated">Not yet refreshed</div>
+  </div>
+  <hr class="sep">
+
+  <div id="bars"></div>
+
+  <hr class="sep">
+
+  <div id="extra"></div>
+
+  <div class="refresh-row">
+    <button class="refresh" onclick="refresh()">Refresh Now</button>
+  </div>
+</div>
+
+<script>
+  function tone(pct) {
+    if (pct < 50) return 'suf';
+    if (pct < 90) return 'par';
+    return 'dep';
+  }
+
+  function renderBar(label, pct, resetStr, eta) {
+    const t = tone(pct);
+    const etaCls = (eta && !eta.startsWith('Insufficient') && !eta.startsWith('—')) ? 'warn' : '';
+    return `
+      <div class="bar-group">
+        <div class="bar-row">
+          <div class="bar-label">${label}</div>
+          <div class="bar-pct ${t}">${pct.toFixed(0)}%</div>
+        </div>
+        <div class="bar-track"><div class="bar-fill ${t}" style="width: ${Math.min(100, pct)}%"></div></div>
+        <div class="bar-meta">
+          <span>Resets in ${resetStr}</span>
+        </div>
+        <div class="bar-eta ${etaCls}">100% ETA: ${eta || 'Insufficient data'}</div>
+      </div>
+    `;
+  }
+
+  function renderExtra(extra) {
+    if (!extra) return '<div class="extra-disabled">Extra Usage: data unavailable</div>';
+    if (!extra.is_enabled) {
+      return `
+        <div class="extra-disabled">Extra Usage is disabled.</div>
+        <div><a class="extra-link" onclick="openAccountSettings()">Enable in Account Settings</a></div>
+        <div class="extra-note">Note: API costs can exceed equivalent subscription rates.</div>
+      `;
+    }
+    const used  = (extra.used_credits  / 100).toFixed(2);
+    const limit = (extra.monthly_limit / 100).toFixed(2);
+    const left  = (extra.monthly_limit - extra.used_credits) / 100;
+    const pct   = extra.monthly_limit > 0 ? Math.min(100, Math.round(extra.used_credits / extra.monthly_limit * 100)) : 0;
+    const t = tone(pct);
+    return `
+      <div class="extra-title">Extra Usage (Monthly Limit of $${limit})</div>
+      <div class="extra-row">
+        <div class="extra-used">$${used} used</div>
+        <div class="extra-pct ${t}">${pct}%</div>
+        <div class="extra-left ${left <= 0 ? 'empty' : ''}">$${left.toFixed(2)} left</div>
+      </div>
+      <div class="bar-track" style="margin-top:6px"><div class="bar-fill ${t}" style="width: ${pct}%"></div></div>
+    `;
+  }
+
+  function applySnapshot(s) {
+    document.getElementById('plan').textContent  = s.plan || 'Unknown';
+    document.getElementById('email').textContent = s.email || '';
+    document.getElementById('updated').textContent =
+      s.last_refresh_ago != null ? `Updated ${s.last_refresh_ago}` : 'Not yet refreshed';
+
+    const bars = [];
+    if (s.show_session) bars.push(renderBar('Session (5-hour)',    s.session_pct, s.session_reset, s.session_eta));
+    if (s.show_weekly)  bars.push(renderBar('Weekly (All Models)', s.weekly_pct,  s.weekly_reset,  s.weekly_eta));
+    if (s.show_sonnet)  bars.push(renderBar('Weekly (Sonnet)',     s.sonnet_pct,  s.weekly_reset,  s.sonnet_eta));
+    document.getElementById('bars').innerHTML = bars.join('<div style="height:6px"></div>');
+
+    document.getElementById('extra').innerHTML = renderExtra(s.extra);
+  }
+
+  function refresh() {
+    window.chrome?.webview?.postMessage({ cmd: 'refresh' });
+  }
+  function openAccountSettings() {
+    window.chrome?.webview?.postMessage({ cmd: 'open_account_settings' });
+  }
+
+  // Rust pushes data here.
+  window.applySnapshot = applySnapshot;
+
+  // Ask Rust for an initial snapshot the moment we're ready.
+  window.chrome?.webview?.postMessage({ cmd: 'ready' });
+</script>
+</body>
+</html>

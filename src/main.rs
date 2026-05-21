@@ -37,6 +37,7 @@ mod tray_registry_patch;
 mod usage_cache;
 mod usage_fetcher;
 mod usage_history;
+mod webview_host;
 
 use std::ptr::null_mut;
 use windows_sys::w;
