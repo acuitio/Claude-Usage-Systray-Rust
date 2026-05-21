@@ -291,10 +291,6 @@ unsafe fn render() {
     let bg_pixel_full   = nopremul_bgra(bg_col, 255);
     fill_bgra(bits, (width * height) as usize, bg_pixel_full);
 
-    // Border always renders fully opaque on top of the translucent bg.
-    let border_pixel = nopremul_bgra(0x006c_4a4a, 255);
-    draw_border(bits, width, height, border_pixel);
-
     // Token pass — text & dividers.
     SetBkMode(hdc_mem, TRANSPARENT as i32);
     let div_h = content_h * 60 / 100;
@@ -329,7 +325,6 @@ unsafe fn render() {
     //     to fully opaque so it renders at full strength.
     //   - alpha = 255 AND RGB matches the bg fill → untouched background;
     //     apply the configured `bg_a` to make it translucent.
-    //   - alpha = 255 AND RGB ≠ bg → border pixel I painted myself; leave.
     finalize_alpha(bits, (width * height) as usize, bg_pixel_full, bg_a);
 
     // Then premultiply RGB by alpha for ULW_ALPHA.
@@ -414,8 +409,6 @@ unsafe fn premultiply_all(bits: *mut c_void, count: usize) {
 ///                    BI_RGB DIBs). Force to 255 so text/dividers render
 ///                    fully opaque regardless of bg opacity.
 ///   - alpha = 255 AND rgb = bg fill colour → background; assign `bg_a`.
-///   - alpha = 255 AND rgb ≠ bg fill colour → our own draws (border etc.);
-///                    leave as-is.
 unsafe fn finalize_alpha(bits: *mut c_void, count: usize, bg_full_pixel: u32, bg_a: u32) {
     let p = bits as *mut u32;
     let bg_rgb = bg_full_pixel & 0x00ff_ffff;
@@ -435,20 +428,6 @@ unsafe fn fill_bgra(bits: *mut c_void, count: usize, pixel: u32) {
     let p = bits as *mut u32;
     for i in 0..count { *p.add(i) = pixel; }
 }
-
-unsafe fn draw_border(bits: *mut c_void, w: i32, h: i32, pixel: u32) {
-    let p = bits as *mut u32;
-    let (wu, hu) = (w as usize, h as usize);
-    for x in 0..wu {
-        *p.add(x) = pixel;                       // top row
-        *p.add((hu - 1) * wu + x) = pixel;       // bottom row
-    }
-    for y in 0..hu {
-        *p.add(y * wu) = pixel;                  // left column
-        *p.add(y * wu + (wu - 1)) = pixel;       // right column
-    }
-}
-
 
 // ─── Window proc ─────────────────────────────────────────────────────
 
@@ -501,9 +480,15 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             }
             WM_TIMER => {
                 if wp == TIMER_TOPMOST {
-                    SetWindowPos(hwnd, HWND_TOPMOST,
-                        0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    // Only re-assert if we've actually slipped — otherwise
+                    // SetWindowPos every 500ms can show as a tiny flicker
+                    // when another window briefly has focus.
+                    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                    if (ex & WS_EX_TOPMOST) == 0 {
+                        SetWindowPos(hwnd, HWND_TOPMOST,
+                            0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    }
                 }
                 0
             }
