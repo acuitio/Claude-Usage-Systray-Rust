@@ -16,9 +16,9 @@ What's implemented:
 - Dashboard window — real plan + cache age + three usage bars with
   per-bar reset times derived from ISO timestamps.
 - Overlay — layered window, per-pixel alpha, drag-to-move, position
-  persisted to `config.json`, two-pass drop shadow (wide glow + tight
-  core via the GDI+ Blur effect) for legibility against translucent
-  backdrops.
+  persisted to `config.json`, rounded corners, a 1px opacity-aware
+  border, and a two-pass drop shadow (wide glow + tight core via the
+  GDI+ Blur effect) for legibility against translucent backdrops.
 - Settings — every `AppConfig` field, including the 5 colour pickers,
   font family combo, opacity/scale spinners, refresh-mode combo, and
   all `show_*` checkboxes. Atomic write on Apply.
@@ -75,6 +75,19 @@ src/
 - **No scrollable Settings.** Dialog is sized to fit everything on
   typical screens (~1100 px tall) and is sizable/maximizable. If your
   display is shorter, drag the dialog to access the lower controls.
+
+## Future ideas
+
+- **Acrylic / frosted-glass background for the overlay.** Swap the
+  `WS_EX_LAYERED` + `UpdateLayeredWindow` per-pixel-alpha pipeline for
+  a regular DWM-composited window with `DwmEnableBlurBehindWindow` or
+  `SetWindowCompositionAttribute(WCA_ACCENT_POLICY)` so the overlay
+  sits on a live-blurred backdrop instead of a solid translucent
+  rectangle — the look Windows 11 Settings / Files use. Substantial
+  refactor: the entire render-to-DIB-then-push pattern goes away, drag
+  handling needs to switch to a normal `WM_NCHITTEST` flow, and the
+  underlying API is technically undocumented (stable, but Microsoft
+  tweaks behavior between Windows builds).
 
 ## Build numbers (release, AOT-equivalent)
 

@@ -335,6 +335,10 @@ unsafe fn render() {
     // Start with a fully transparent surface (alpha=0 everywhere).
     GdipGraphicsClear(g, 0);
 
+    // ── Rounded-rect path (used for fill, clip, and border) ────────────
+    let corner_r = (6.0 * scale).max(4.0);
+    let bg_path  = create_rounded_rect_path(0.0, 0.0, width as f32, height as f32, corner_r);
+
     // ── Background fill ────────────────────────────────────────────────
     let opacity = cfg.overlay_opacity.clamp(0, 100) as u32;
     let bg_a = (opacity * 255 / 100).max(1);
@@ -343,8 +347,12 @@ unsafe fn render() {
 
     let mut bg_brush: *mut GpSolidFill = null_mut();
     GdipCreateSolidFill(bg_argb, &mut bg_brush);
-    GdipFillRectangleI(g, bg_brush as *mut GpBrush, 0, 0, width, height);
+    GdipFillPath(g, bg_brush as *mut GpBrush, bg_path);
     GdipDeleteBrush(bg_brush as *mut GpBrush);
+
+    // Clip subsequent drawing to the rounded shape so the wide shadow glow
+    // can't poke pixels into the transparent corner regions outside the path.
+    GdipSetClipPath(g, bg_path, CombineModeReplace);
 
     // ── Two-pass drop shadow (glow first, then tight core on top) ──────
     // Dividers are intentionally not shadowed — they're thin lines that
@@ -397,6 +405,30 @@ unsafe fn render() {
         }
         x += tok.width;
     }
+
+    // ── 1px border, opacity-aware ──────────────────────────────────────
+    // alpha = min(255, opacity * 3): saturates at ~33% opacity, fades to
+    // zero at opacity 0. Matches the Python original (lines 1549-1553).
+    GdipResetClip(g);
+    let border_alpha = (opacity * 3).min(255) as u8;
+    if border_alpha > 0 {
+        const BORDER_COLORREF: u32 = 0x006c_4a4a; // #4a4a6c — matches Python
+        let border_argb = colorref_to_argb(BORDER_COLORREF, border_alpha);
+        // Inset 0.5 px so the 1px pen sits on integer pixel boundaries
+        // inside the bitmap edge (otherwise the AA pen splits across the
+        // edge and the top/left row of the stroke gets clipped off).
+        let border_path = create_rounded_rect_path(
+            0.5, 0.5,
+            width as f32 - 1.0, height as f32 - 1.0,
+            (corner_r - 0.5).max(2.0),
+        );
+        let mut pen: *mut GpPen = null_mut();
+        GdipCreatePen1(border_argb, 1.0, UnitPixel, &mut pen);
+        GdipDrawPath(g, pen, border_path);
+        GdipDeletePen(pen);
+        GdipDeletePath(border_path);
+    }
+    GdipDeletePath(bg_path);
 
     // ── Push to the layered window ──────────────────────────────────────
     let blend = BLENDFUNCTION {
@@ -529,6 +561,24 @@ unsafe fn apply_shadow_layer(
 }
 
 // ─── GDI+ helpers ─────────────────────────────────────────────────────
+
+/// Build a closed rounded-corner rectangle as a `GpPath`. The caller owns
+/// the returned path and must release it with `GdipDeletePath`.
+/// Stitched from four 90° arcs — consecutive `GdipAddPathArc` calls inside
+/// the same figure connect endpoint-to-endpoint with implicit line segments,
+/// so we don't need explicit edge lines.
+unsafe fn create_rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> *mut GpPath {
+    let r = r.min(w / 2.0).min(h / 2.0);
+    let d = r * 2.0;
+    let mut path: *mut GpPath = null_mut();
+    GdipCreatePath(FillModeAlternate, &mut path);
+    GdipAddPathArc(path, x,         y,         d, d, 180.0, 90.0); // top-left
+    GdipAddPathArc(path, x + w - d, y,         d, d, 270.0, 90.0); // top-right
+    GdipAddPathArc(path, x + w - d, y + h - d, d, d,   0.0, 90.0); // bottom-right
+    GdipAddPathArc(path, x,         y + h - d, d, d,  90.0, 90.0); // bottom-left
+    GdipClosePathFigure(path);
+    path
+}
 
 /// Look up a font family by name, falling back to Segoe UI if the user's
 /// configured font isn't installed.
