@@ -30,6 +30,7 @@ mod overlay;
 mod paths;
 mod poll_service;
 mod settings;
+mod startup_registry;
 mod tray;
 mod tray_registry_patch;
 mod usage_cache;

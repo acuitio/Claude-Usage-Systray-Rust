@@ -289,8 +289,21 @@ unsafe fn pick_color(owner: HWND, inout: &mut u32) -> bool {
 // ─── Command handling ────────────────────────────────────────────────
 
 unsafe fn apply_settings(hwnd: HWND) {
-    let mut cfg = config_store::load();
+    let old_cfg = config_store::load();
+    let mut cfg = old_cfg.clone();
     collect_into_config(hwnd, &mut cfg);
+
+    // Sync the HKCU Run key if the startup-on-login toggle changed.
+    if cfg.start_on_startup != old_cfg.start_on_startup {
+        if cfg.start_on_startup {
+            if let Ok(exe) = std::env::current_exe() {
+                crate::startup_registry::set_enabled(Some(&exe.to_string_lossy()));
+            }
+        } else {
+            crate::startup_registry::set_enabled(None);
+        }
+    }
+
     if let Err(e) = config_store::save(&cfg) {
         let msg = wstr(&format!("Failed to save settings:\n{e}"));
         MessageBoxW(hwnd, msg.as_ptr(), w!("Settings"), MB_OK | MB_ICONERROR);

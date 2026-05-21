@@ -33,14 +33,7 @@ pub unsafe fn install(host: HWND) {
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAY_CALLBACK;
     nid.hIcon = icon;
-    let tip_str = format!(
-        "Usage: {:.0}% | {:.0}% | {:.0}%\n{}",
-        usage.session_pct, usage.weekly_pct, usage.sonnet_pct, usage.plan,
-    );
-    let tip = wstr(&tip_str);
-    for (i, c) in tip.iter().take(127).enumerate() {
-        nid.szTip[i] = *c;
-    }
+    write_tooltip(&mut nid.szTip, &usage);
 
     Shell_NotifyIconW(NIM_ADD, &nid);
 }
@@ -76,7 +69,7 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
         match cmd as u16 {
             ID_MENU_DASHBOARD => dashboard::open(host),
             ID_MENU_OVERLAY   => overlay::toggle(host),
-            ID_MENU_REFRESH   => { /* would re-fetch usage; no-op in prototype */ }
+            ID_MENU_REFRESH   => { crate::poll_service::trigger_refresh(); }
             ID_MENU_SETTINGS  => settings::open(host),
             ID_MENU_QUIT      => { remove(); PostQuitMessage(0); }
             _ => {}
@@ -97,15 +90,30 @@ pub unsafe fn refresh() {
     nid.uID = 1;
     nid.uFlags = NIF_ICON | NIF_TIP;
     nid.hIcon = icon;
+    write_tooltip(&mut nid.szTip, &usage);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+/// Build the NIF_TIP buffer:
+///   "Usage: X% | Y% | Z%
+///    <plan>[ · Rate-limited Xm Ys]"
+/// Capped at 127 chars (the NIF_TIP limit).
+unsafe fn write_tooltip(buf: &mut [u16], usage: &crate::common::UsageData) {
+    let cd = crate::cooldown::remaining_seconds();
+    let suffix = if cd > 0 {
+        format!(" · Rate-limited {}", crate::cooldown::format(cd))
+    } else {
+        String::new()
+    };
     let tip_str = format!(
-        "Usage: {:.0}% | {:.0}% | {:.0}%\n{}",
-        usage.session_pct, usage.weekly_pct, usage.sonnet_pct, usage.plan,
+        "Usage: {:.0}% | {:.0}% | {:.0}%\n{}{}",
+        usage.session_pct, usage.weekly_pct, usage.sonnet_pct, usage.plan, suffix,
     );
     let tip = wstr(&tip_str);
-    for (i, c) in tip.iter().take(127).enumerate() {
-        nid.szTip[i] = *c;
+    let limit = buf.len().min(127);
+    for (i, c) in tip.iter().take(limit).enumerate() {
+        buf[i] = *c;
     }
-    Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
 pub unsafe fn remove() {

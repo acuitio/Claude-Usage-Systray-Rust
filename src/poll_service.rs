@@ -61,3 +61,19 @@ pub fn start(host: HWND) {
 fn host_hwnd() -> Option<HWND> {
     HOST.lock().ok()?.as_ref().map(|h| h.0 as HWND)
 }
+
+/// One-shot force fetch on its own thread. Used by the tray's "Refresh Now"
+/// menu item. We don't try to interrupt the polling thread's sleep — just
+/// run an independent fetch and post the redraw signal.
+pub fn trigger_refresh() {
+    let host_addr: Option<isize> = host_hwnd().map(|h| h as isize);
+    thread::spawn(move || {
+        let http = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(15))
+            .build();
+        let _ = usage_fetcher::fetch(&http, true);
+        if let Some(addr) = host_addr {
+            unsafe { PostMessageW(addr as HWND, WM_USAGE_UPDATED, 0, 0); }
+        }
+    });
+}
