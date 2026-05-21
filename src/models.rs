@@ -10,9 +10,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]                         pub start_on_startup: bool,
-    #[serde(default)]                         pub background_collection: bool,
-    #[serde(default = "default_collector_interval_sec")]
-                                              pub collector_interval_sec: i32,
     #[serde(default = "default_true")]        pub auto_refresh_token: bool,
     #[serde(default = "default_scale_pct")]   pub scale_pct: i32,
     #[serde(default = "default_poll_sec")]    pub poll_interval_sec: i32,
@@ -28,8 +25,6 @@ pub struct AppConfig {
     #[serde(default = "default_font")]        pub font_family: String,
     #[serde(default)]                         pub widget_x: Option<i32>,
     #[serde(default)]                         pub widget_y: Option<i32>,
-    #[serde(default)]                         pub widget_w: Option<i32>,
-    #[serde(default = "default_widget_h")]    pub widget_h: Option<i32>,
     #[serde(default = "default_bg")]          pub bg_color: String,
     #[serde(default = "default_suf")]         pub color_sufficient: String,
     #[serde(default = "default_part")]        pub color_partial: String,
@@ -48,8 +43,6 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             start_on_startup: false,
-            background_collection: false,
-            collector_interval_sec: 600,
             auto_refresh_token: true,
             scale_pct: 100,
             poll_interval_sec: 300,
@@ -65,8 +58,6 @@ impl Default for AppConfig {
             font_family: "Segoe UI".into(),
             widget_x: None,
             widget_y: None,
-            widget_w: None,
-            widget_h: Some(28),
             bg_color: "#1e1e2e".into(),
             color_sufficient: "#64c864".into(),
             color_partial: "#e6c832".into(),
@@ -83,14 +74,12 @@ impl Default for AppConfig {
 
 // Serde `default = "fn"` requires named functions (closures don't qualify).
 fn default_true()                  -> bool   { true }
-fn default_collector_interval_sec()-> i32    { 600 }
 fn default_scale_pct()             -> i32    { 100 }
 fn default_poll_sec()              -> i32    { 300 }
 fn default_tray()                  -> String { "tray".into() }
 fn default_overlay_fmt()           -> String { "{session}  |  {weekly}  |  {sonnet}".into() }
 fn default_opacity()               -> i32    { 85 }
 fn default_font()                  -> String { "Segoe UI".into() }
-fn default_widget_h()              -> Option<i32> { Some(28) }
 fn default_bg()                    -> String { "#1e1e2e".into() }
 fn default_suf()                   -> String { "#64c864".into() }
 fn default_part()                  -> String { "#e6c832".into() }

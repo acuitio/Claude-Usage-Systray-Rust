@@ -1,6 +1,8 @@
 // Tray icon + context menu. Matches src/App/TrayApp.cs behaviour.
 
+use std::cell::RefCell;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use windows_sys::w;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -12,7 +14,7 @@ use crate::{chart, dashboard, overlay, settings};
 
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 
-// Menu command IDs (kept separate from settings IDs)
+// Menu command IDs.
 const ID_MENU_DASHBOARD: u16 = 9001;
 const ID_MENU_OVERLAY:   u16 = 9002;
 const ID_MENU_REFRESH:   u16 = 9003;
@@ -20,22 +22,36 @@ const ID_MENU_SETTINGS:  u16 = 9004;
 const ID_MENU_CHART:     u16 = 9006;
 const ID_MENU_QUIT:      u16 = 9005;
 
-static mut TRAY_HWND: HWND = null_mut();
+// The hidden host window that receives our tray callback. Set once at
+// install() and read by refresh()/remove() — single-thread access in practice,
+// but `AtomicPtr` is the cheapest way to satisfy Rust without `static mut`.
+static TRAY_HWND: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(null_mut());
+
+// Icon cache. Rebuilding the 64×64 icon on every poll wastes GDI cycles when
+// the rounded percentage and color tier haven't changed. Keyed on
+// (pct_int, color); only NIM_MODIFY when those move.
+struct IconCache {
+    pct_int: i32,
+    color:   u32,
+    icon:    HICON,
+}
+thread_local! {
+    static ICON_CACHE: RefCell<Option<IconCache>> = const { RefCell::new(None) };
+}
 
 pub unsafe fn install(host: HWND) {
-    TRAY_HWND = host;
+    TRAY_HWND.store(host, Ordering::Relaxed);
 
     let usage = current_snapshot();
-    let icon = build_tray_icon(usage.session_pct);
+    let icon  = get_or_build_icon(usage.session_pct);
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = host;
-    nid.uID = 1;
+    nid.hWnd   = host;
+    nid.uID    = 1;
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAY_CALLBACK;
-    nid.hIcon = icon;
+    nid.hIcon  = icon;
     write_tooltip(&mut nid.szTip, &usage);
-
     Shell_NotifyIconW(NIM_ADD, &nid);
 }
 
@@ -46,9 +62,8 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
         GetCursorPos(&mut pt);
 
         let menu = CreatePopupMenu();
-        let dash_open = dashboard::is_open();
+        let dash_open    = dashboard::is_open();
         let overlay_open = overlay::is_open();
-        // Group 1: openable windows (each shows a check when its window is up)
         AppendMenuW(menu,
             MF_STRING | if dash_open { MF_CHECKED } else { MF_UNCHECKED },
             ID_MENU_DASHBOARD as usize, w!("Dashboard"));
@@ -60,15 +75,12 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
             ID_MENU_CHART as usize, w!("Usage Chart"));
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
-        // Group 2: actions
         AppendMenuW(menu, MF_STRING, ID_MENU_REFRESH as usize,  w!("Refresh Now"));
         AppendMenuW(menu, MF_STRING, ID_MENU_SETTINGS as usize, w!("Settings"));
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
-        // Group 3: exit
         AppendMenuW(menu, MF_STRING, ID_MENU_QUIT as usize, w!("Quit"));
 
-        // Required so TrackPopupMenu can dismiss on outside click
         SetForegroundWindow(host);
         let cmd = TrackPopupMenu(
             menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_BOTTOMALIGN,
@@ -89,26 +101,22 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
 }
 
 /// Re-read cache + credentials and push the updated icon + tooltip into
-/// the tray via NIM_MODIFY. Called from the host window's WM_USAGE_UPDATED
-/// handler after a successful poll.
+/// the tray. Called from the host window's WM_USAGE_UPDATED handler.
 pub unsafe fn refresh() {
-    if TRAY_HWND.is_null() { return; }
+    let host = TRAY_HWND.load(Ordering::Relaxed);
+    if host.is_null() { return; }
     let usage = current_snapshot();
-    let icon = build_tray_icon(usage.session_pct);
+    let icon  = get_or_build_icon(usage.session_pct);
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = TRAY_HWND;
-    nid.uID = 1;
+    nid.hWnd   = host;
+    nid.uID    = 1;
     nid.uFlags = NIF_ICON | NIF_TIP;
-    nid.hIcon = icon;
+    nid.hIcon  = icon;
     write_tooltip(&mut nid.szTip, &usage);
     Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
-/// Build the NIF_TIP buffer:
-///   "Usage: X% | Y% | Z%
-///    <plan>[ · Rate-limited Xm Ys]"
-/// Capped at 127 chars (the NIF_TIP limit).
 unsafe fn write_tooltip(buf: &mut [u16], usage: &crate::common::UsageData) {
     let cd = crate::cooldown::remaining_seconds();
     let suffix = if cd > 0 {
@@ -130,31 +138,47 @@ unsafe fn write_tooltip(buf: &mut [u16], usage: &crate::common::UsageData) {
 pub unsafe fn remove() {
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = TRAY_HWND;
-    nid.uID = 1;
+    nid.hWnd   = TRAY_HWND.load(Ordering::Relaxed);
+    nid.uID    = 1;
     Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+/// Return the cached HICON if (rounded-pct, color-tier) match the last call;
+/// otherwise rebuild, destroy the previous handle, and cache the new one.
+unsafe fn get_or_build_icon(pct: f64) -> HICON {
+    let pct_int = pct.round() as i32;
+    let color   = pct_color(pct);
+    ICON_CACHE.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if let Some(c) = slot.as_ref() {
+            if c.pct_int == pct_int && c.color == color {
+                return c.icon;
+            }
+            DestroyIcon(c.icon);
+        }
+        let icon = build_tray_icon(pct);
+        *slot = Some(IconCache { pct_int, color, icon });
+        icon
+    })
 }
 
 // Render the bar-chart icon at 64×64, then convert to HICON.
 unsafe fn build_tray_icon(pct: f64) -> HICON {
     let hdc_screen = GetDC(null_mut());
-    let hdc_mem = CreateCompatibleDC(hdc_screen);
-    let bmp = CreateCompatibleBitmap(hdc_screen, 64, 64);
-    let old_bmp = SelectObject(hdc_mem, bmp as HGDIOBJ);
+    let hdc_mem    = CreateCompatibleDC(hdc_screen);
+    let bmp        = CreateCompatibleBitmap(hdc_screen, 64, 64);
+    let old_bmp    = SelectObject(hdc_mem, bmp as HGDIOBJ);
 
-    // Background
     let brush_bg = CreateSolidBrush(0x002e_1e1e);
     let rc = RECT { left: 0, top: 0, right: 64, bottom: 64 };
     FillRect(hdc_mem, &rc, brush_bg);
     DeleteObject(brush_bg as HGDIOBJ);
 
-    // Inner box
     let brush_inner = CreateSolidBrush(0x0046_3232);
     let rc_inner = RECT { left: 4, top: 8, right: 60, bottom: 56 };
     FillRect(hdc_mem, &rc_inner, brush_inner);
     DeleteObject(brush_inner as HGDIOBJ);
 
-    // Bar
     let bar_h = (48.0 * pct.min(100.0) / 100.0) as i32;
     if bar_h > 0 {
         let brush_bar = CreateSolidBrush(pct_color(pct));
@@ -163,7 +187,6 @@ unsafe fn build_tray_icon(pct: f64) -> HICON {
         DeleteObject(brush_bar as HGDIOBJ);
     }
 
-    // "X" text — Arial Bold 18px, drawn at y=56 (matches Python original)
     let font = CreateFontW(
         18, 0, 0, 0, FW_BOLD as i32,
         0, 0, 0, DEFAULT_CHARSET as u32, OUT_DEFAULT_PRECIS as u32,
@@ -184,15 +207,11 @@ unsafe fn build_tray_icon(pct: f64) -> HICON {
     DeleteDC(hdc_mem);
     ReleaseDC(null_mut(), hdc_screen);
 
-    // Convert bitmap to icon
     let mut mask_bits: [u8; 64 * 64 / 8] = [0; 64 * 64 / 8];
     let mask = CreateBitmap(64, 64, 1, 1, mask_bits.as_mut_ptr() as _);
     let ii = ICONINFO {
-        fIcon: 1,
-        xHotspot: 0,
-        yHotspot: 0,
-        hbmMask: mask,
-        hbmColor: bmp,
+        fIcon: 1, xHotspot: 0, yHotspot: 0,
+        hbmMask: mask, hbmColor: bmp,
     };
     let icon = CreateIconIndirect(&ii);
     DeleteObject(bmp as HGDIOBJ);

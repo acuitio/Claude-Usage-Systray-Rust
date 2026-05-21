@@ -4,7 +4,9 @@
 // "reset_defaults" messages back.
 
 use std::cell::RefCell;
+use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use windows_sys::w;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -15,7 +17,8 @@ use crate::common::*;
 use crate::webview_host::ParentWindow;
 use crate::{config_store, models::AppConfig};
 
-static mut HWND_SETTINGS: HWND = null_mut();
+static HWND_SETTINGS: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+fn settings_hwnd() -> HWND { HWND_SETTINGS.load(Ordering::Relaxed) }
 
 thread_local! {
     static WEBVIEW: RefCell<Option<wry::WebView>> = const { RefCell::new(None) };
@@ -24,8 +27,9 @@ thread_local! {
 const SETTINGS_HTML: &str = include_str!("../assets/settings.html");
 
 pub unsafe fn open(_owner: HWND) {
-    if !HWND_SETTINGS.is_null() && IsWindow(HWND_SETTINGS) != 0 {
-        SetForegroundWindow(HWND_SETTINGS);
+    let existing = settings_hwnd();
+    if !existing.is_null() && IsWindow(existing) != 0 {
+        SetForegroundWindow(existing);
         return;
     }
     let class_name = w!("Win32SettingsWebView");
@@ -39,23 +43,24 @@ pub unsafe fn open(_owner: HWND) {
         hInstance: instance,
         hIcon: null_mut(),
         hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-        hbrBackground: HBR_BG,
+        hbrBackground: hbr_bg(),
         lpszMenuName: std::ptr::null(),
         lpszClassName: class_name,
         hIconSm: null_mut(),
     };
     RegisterClassExW(&wc);
 
-    HWND_SETTINGS = CreateWindowExW(
+    let hwnd = CreateWindowExW(
         0, class_name, w!("Settings"),
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, 620, 820,
         null_mut(), null_mut(), instance, std::ptr::null(),
     );
-    SetWindowPos(HWND_SETTINGS, HWND_TOP, 0, 0, 0, 0,
+    HWND_SETTINGS.store(hwnd, Ordering::Relaxed);
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-    UpdateWindow(HWND_SETTINGS);
-    SetForegroundWindow(HWND_SETTINGS);
+    UpdateWindow(hwnd);
+    SetForegroundWindow(hwnd);
 }
 
 unsafe fn attach_webview(parent_hwnd: HWND) {
@@ -149,17 +154,13 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
     // would wipe them. Merge: take the form fields from `new_cfg`, keep the
     // non-form fields from `old_cfg`.
     let merged = AppConfig {
-        widget_x:               old_cfg.widget_x,
-        widget_y:               old_cfg.widget_y,
-        widget_w:               old_cfg.widget_w,
-        widget_h:               old_cfg.widget_h,
-        background_collection:  old_cfg.background_collection,
-        collector_interval_sec: old_cfg.collector_interval_sec,
-        dashboard_open:         old_cfg.dashboard_open,
-        dashboard_x:            old_cfg.dashboard_x,
-        dashboard_y:            old_cfg.dashboard_y,
-        dashboard_w:            old_cfg.dashboard_w,
-        dashboard_h:            old_cfg.dashboard_h,
+        widget_x:       old_cfg.widget_x,
+        widget_y:       old_cfg.widget_y,
+        dashboard_open: old_cfg.dashboard_open,
+        dashboard_x:    old_cfg.dashboard_x,
+        dashboard_y:    old_cfg.dashboard_y,
+        dashboard_w:    old_cfg.dashboard_w,
+        dashboard_h:    old_cfg.dashboard_h,
         ..new_cfg
     };
 
@@ -180,8 +181,9 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
 
 fn close_window() {
     unsafe {
-        if !HWND_SETTINGS.is_null() {
-            PostMessageW(HWND_SETTINGS, WM_CLOSE, 0, 0);
+        let h = settings_hwnd();
+        if !h.is_null() {
+            PostMessageW(h, WM_CLOSE, 0, 0);
         }
     }
 }
@@ -202,7 +204,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             WM_CLOSE => { DestroyWindow(hwnd); 0 }
             WM_DESTROY => {
                 WEBVIEW.with(|c| { c.borrow_mut().take(); });
-                HWND_SETTINGS = null_mut();
+                HWND_SETTINGS.store(null_mut(), Ordering::Relaxed);
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),

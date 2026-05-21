@@ -78,6 +78,18 @@ fn main() {
         // on Windows 10 it pops a one-time install dialog.
         let _ = webview2_install::ensure_installed();
 
+        // First-run check: if the Claude CLI hasn't been used on this machine,
+        // ~/.claude/.credentials.json won't exist and every reading will be
+        // 0%. A silent 0% is confusing; surface the actual cause once.
+        if credentials::read_full().is_none() {
+            MessageBoxW(
+                null_mut(),
+                w!("Welcome! This widget shows your Claude usage, but it needs the Claude CLI's authentication first.\n\nPlease run \"claude login\" in a terminal, then restart this app.\n\nThe widget will continue running with 0% values until you do."),
+                w!("Claude Usage Systray — Setup needed"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+        }
+
         common::init_resources();
 
         // Hidden message-only window: hosts the tray icon's callback.

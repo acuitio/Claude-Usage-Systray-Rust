@@ -5,7 +5,9 @@
 // Mirrors src/dashboard.rs.
 
 use std::cell::RefCell;
+use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use windows_sys::w;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -15,7 +17,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::common::*;
 use crate::webview_host::ParentWindow;
 
-static mut HWND_CHART: HWND = null_mut();
+static HWND_CHART: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+fn chart_hwnd() -> HWND { HWND_CHART.load(Ordering::Relaxed) }
 
 thread_local! {
     static WEBVIEW: RefCell<Option<wry::WebView>> = const { RefCell::new(None) };
@@ -24,7 +27,8 @@ thread_local! {
 const CHART_HTML: &str = include_str!("../assets/chart.html");
 
 pub unsafe fn is_open() -> bool {
-    !HWND_CHART.is_null() && IsWindow(HWND_CHART) != 0
+    let h = chart_hwnd();
+    !h.is_null() && IsWindow(h) != 0
 }
 
 pub unsafe fn on_data_changed() {
@@ -33,10 +37,11 @@ pub unsafe fn on_data_changed() {
 
 pub unsafe fn open(_owner: HWND) {
     if is_open() {
-        if GetWindowLongW(HWND_CHART, GWL_STYLE) & WS_MINIMIZE as i32 != 0 {
-            ShowWindow(HWND_CHART, SW_RESTORE);
+        let h = chart_hwnd();
+        if GetWindowLongW(h, GWL_STYLE) & WS_MINIMIZE as i32 != 0 {
+            ShowWindow(h, SW_RESTORE);
         }
-        SetForegroundWindow(HWND_CHART);
+        SetForegroundWindow(h);
         return;
     }
 
@@ -51,7 +56,7 @@ pub unsafe fn open(_owner: HWND) {
         hInstance: instance,
         hIcon: null_mut(),
         hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-        hbrBackground: HBR_BG,
+        hbrBackground: hbr_bg(),
         lpszMenuName: std::ptr::null(),
         lpszClassName: class_name,
         hIconSm: null_mut(),
@@ -65,16 +70,17 @@ pub unsafe fn open(_owner: HWND) {
     let cx = wa.left + ((wa.right - wa.left) - cw) / 2;
     let cy = wa.top  + ((wa.bottom - wa.top) - ch) / 2;
 
-    HWND_CHART = CreateWindowExW(
+    let hwnd = CreateWindowExW(
         0, class_name, w!("Usage Chart"),
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         cx, cy, cw, ch,
         null_mut(), null_mut(), instance, std::ptr::null(),
     );
-    SetWindowPos(HWND_CHART, HWND_TOP, 0, 0, 0, 0,
+    HWND_CHART.store(hwnd, Ordering::Relaxed);
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-    UpdateWindow(HWND_CHART);
-    SetForegroundWindow(HWND_CHART);
+    UpdateWindow(hwnd);
+    SetForegroundWindow(hwnd);
 }
 
 unsafe fn attach_webview(parent_hwnd: HWND) {
@@ -148,7 +154,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             WM_CLOSE      => { DestroyWindow(hwnd); 0 }
             WM_DESTROY    => {
                 WEBVIEW.with(|c| { c.borrow_mut().take(); });
-                HWND_CHART = null_mut();
+                HWND_CHART.store(null_mut(), Ordering::Relaxed);
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),

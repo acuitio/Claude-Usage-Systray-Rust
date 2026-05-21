@@ -11,8 +11,10 @@
 //   - color_sufficient/partial/depleted — percentage tokens, by threshold
 //   - widget_x / widget_y       — restored position
 
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use windows_sys::w;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -24,9 +26,17 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::common::*;
 use crate::models::AppConfig;
 
-static mut HWND_OVERLAY: HWND = null_mut();
-static mut DRAGGING: bool = false;
-static mut DRAG_START: POINT = POINT { x: 0, y: 0 };
+// HWND of the overlay window. Set when `show()` succeeds, cleared on
+// WM_DESTROY. AtomicPtr satisfies the borrow checker without forcing a
+// Mutex on what is effectively single-threaded state.
+static HWND_OVERLAY: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static DRAGGING: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static DRAG_START: Cell<POINT> = const { Cell::new(POINT { x: 0, y: 0 }) };
+}
+
+fn overlay_hwnd() -> HWND { HWND_OVERLAY.load(Ordering::Relaxed) }
+fn set_overlay_hwnd(h: HWND) { HWND_OVERLAY.store(h, Ordering::Relaxed); }
 
 const MK_LBUTTON: u32 = 0x0001;
 /// Re-assert HWND_TOPMOST every 200ms so the overlay can't slip under the
@@ -39,7 +49,8 @@ const TIMER_TOPMOST: usize = 1;
 const PIXEL_FORMAT_32BPP_PARGB: i32 = 0x0e200b;
 
 pub unsafe fn is_open() -> bool {
-    !HWND_OVERLAY.is_null() && IsWindow(HWND_OVERLAY) != 0
+    let h = overlay_hwnd();
+    !h.is_null() && IsWindow(h) != 0
 }
 
 pub unsafe fn on_data_changed() {
@@ -48,8 +59,8 @@ pub unsafe fn on_data_changed() {
 
 pub unsafe fn toggle(_owner: HWND) {
     let now_open = if is_open() {
-        DestroyWindow(HWND_OVERLAY);
-        HWND_OVERLAY = null_mut();
+        DestroyWindow(overlay_hwnd());
+        set_overlay_hwnd(null_mut());
         false
     } else {
         show();
@@ -102,15 +113,16 @@ unsafe fn show() {
         (cx, cy)
     };
 
-    HWND_OVERLAY = CreateWindowExW(
+    let hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
         class_name, std::ptr::null(),
         WS_POPUP,
         x, y, 240, 44,
         null_mut(), null_mut(), instance, std::ptr::null(),
     );
-    ShowWindow(HWND_OVERLAY, SW_SHOWNOACTIVATE);
-    SetTimer(HWND_OVERLAY, TIMER_TOPMOST, 200, None);
+    set_overlay_hwnd(hwnd);
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    SetTimer(hwnd, TIMER_TOPMOST, 200, None);
     render();
 }
 
@@ -269,13 +281,14 @@ unsafe fn render() {
     let height = (content_h + pad_y * 2 + 2).max(10);
 
     // Resize the overlay window to fit measured content.
+    let hwnd = overlay_hwnd();
     let mut rc: RECT = std::mem::zeroed();
-    GetWindowRect(HWND_OVERLAY, &mut rc);
+    GetWindowRect(hwnd, &mut rc);
     if (rc.right - rc.left) != width || (rc.bottom - rc.top) != height {
-        SetWindowPos(HWND_OVERLAY, null_mut(),
+        SetWindowPos(hwnd, null_mut(),
             0, 0, width, height,
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-        GetWindowRect(HWND_OVERLAY, &mut rc);
+        GetWindowRect(hwnd, &mut rc);
     }
 
     // ── DIB section + GDI+ bitmap ───────────────────────────────────────
@@ -368,7 +381,7 @@ unsafe fn render() {
     let mut sz = SIZE { cx: width, cy: height };
     let mut pt_src = POINT { x: 0, y: 0 };
     let mut pt_dst = POINT { x: rc.left, y: rc.top };
-    UpdateLayeredWindow(HWND_OVERLAY, hdc_screen,
+    UpdateLayeredWindow(hwnd, hdc_screen,
         &mut pt_dst, &mut sz, hdc_mem, &mut pt_src,
         0, &blend, ULW_ALPHA);
 
@@ -454,22 +467,23 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
         match msg {
             WM_LBUTTONDOWN => {
                 let pt = lparam_to_point(lp);
-                DRAGGING = false;
-                DRAG_START = pt;
+                DRAGGING.store(false, Ordering::Relaxed);
+                DRAG_START.with(|c| c.set(pt));
                 SetCapture(hwnd);
                 0
             }
             WM_MOUSEMOVE => {
                 if (wp & MK_LBUTTON as usize) != 0 {
                     let pt = lparam_to_point(lp);
-                    if (pt.x - DRAG_START.x).abs() > 3 || (pt.y - DRAG_START.y).abs() > 3 {
-                        DRAGGING = true;
+                    let start = DRAG_START.with(|c| c.get());
+                    if (pt.x - start.x).abs() > 3 || (pt.y - start.y).abs() > 3 {
+                        DRAGGING.store(true, Ordering::Relaxed);
                     }
-                    if DRAGGING {
+                    if DRAGGING.load(Ordering::Relaxed) {
                         let mut rc: RECT = std::mem::zeroed();
                         GetWindowRect(hwnd, &mut rc);
-                        let dx = pt.x - DRAG_START.x;
-                        let dy = pt.y - DRAG_START.y;
+                        let dx = pt.x - start.x;
+                        let dy = pt.y - start.y;
                         let w = rc.right - rc.left;
                         let h = rc.bottom - rc.top;
                         let (cx, cy) = clamp_to_virtual_screen(rc.left + dx, rc.top + dy, w, h);
@@ -482,7 +496,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             }
             WM_LBUTTONUP => {
                 ReleaseCapture();
-                if DRAGGING {
+                if DRAGGING.load(Ordering::Relaxed) {
                     let mut rc: RECT = std::mem::zeroed();
                     GetWindowRect(hwnd, &mut rc);
                     let mut cfg = crate::config_store::load();
@@ -490,7 +504,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                     cfg.widget_y = Some(rc.top);
                     let _ = crate::config_store::save(&cfg);
                 }
-                DRAGGING = false;
+                DRAGGING.store(false, Ordering::Relaxed);
                 0
             }
             WM_TIMER => {
@@ -510,7 +524,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
             }
             WM_DESTROY => {
                 KillTimer(hwnd, TIMER_TOPMOST);
-                HWND_OVERLAY = null_mut();
+                set_overlay_hwnd(null_mut());
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),

@@ -1,41 +1,28 @@
-// Shared constants, palette, fonts, and tiny helpers used across modules.
+// Shared constants, palette, and tiny helpers used across modules.
 
-use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 // ─── Palette (COLORREF = 0x00BBGGRR) ──────────────────────────────────
-pub const BG_DARK: u32      = 0x002e_1e1e;
-pub const SURFACE: u32      = 0x0025_2525;
-pub const GREEN: u32        = 0x0033_ff33;
-pub const YELLOW: u32       = 0x0032_c8e6;
-pub const RED: u32          = 0x0050_50e6;
+pub const BG_DARK: u32 = 0x002e_1e1e;
+pub const GREEN:   u32 = 0x0033_ff33;
+pub const YELLOW:  u32 = 0x0032_c8e6;
+pub const RED:     u32 = 0x0050_50e6;
 
-// ─── Cached resources (UI thread only) ────────────────────────────────
-pub static mut HBR_BG: HBRUSH = null_mut();
-pub static mut HBR_SURFACE: HBRUSH = null_mut();
-pub static mut FONT_REG: HFONT = null_mut();
-pub static mut FONT_BOLD: HFONT = null_mut();
+// Cached background brush, shared by the WebView2 host windows
+// (dashboard / settings / chart). Single-init at startup; never freed
+// — process exit is fine.
+static HBR_BG_PTR: AtomicPtr<core::ffi::c_void> =
+    AtomicPtr::new(std::ptr::null_mut());
 
-pub unsafe fn init_resources() {
-    HBR_BG      = CreateSolidBrush(BG_DARK);
-    HBR_SURFACE = CreateSolidBrush(SURFACE);
-    FONT_REG    = make_font(-14, FW_NORMAL as i32);
-    FONT_BOLD   = make_font(-14, FW_BOLD as i32);
+pub fn hbr_bg() -> HBRUSH {
+    HBR_BG_PTR.load(Ordering::Relaxed)
 }
 
-unsafe fn make_font(height: i32, weight: i32) -> HFONT {
-    CreateFontW(
-        height, 0, 0, 0, weight,
-        0, 0, 0,
-        DEFAULT_CHARSET as u32,
-        OUT_DEFAULT_PRECIS as u32,
-        CLIP_DEFAULT_PRECIS as u32,
-        CLEARTYPE_QUALITY as u32,
-        (DEFAULT_PITCH | FF_DONTCARE) as u32,
-        windows_sys::w!("Segoe UI"),
-    )
+pub unsafe fn init_resources() {
+    HBR_BG_PTR.store(CreateSolidBrush(BG_DARK), Ordering::Relaxed);
 }
 
 // ─── Small helpers ────────────────────────────────────────────────────

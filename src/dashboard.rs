@@ -4,7 +4,9 @@
 // listens for "refresh" / "open_account_settings" messages back.
 
 use std::cell::RefCell;
+use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use windows_sys::w;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -14,7 +16,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::common::*;
 use crate::webview_host::ParentWindow;
 
-static mut HWND_DASH: HWND = null_mut();
+static HWND_DASH: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+fn dash_hwnd() -> HWND { HWND_DASH.load(Ordering::Relaxed) }
 
 thread_local! {
     static WEBVIEW: RefCell<Option<wry::WebView>> = const { RefCell::new(None) };
@@ -23,7 +26,8 @@ thread_local! {
 const DASHBOARD_HTML: &str = include_str!("../assets/dashboard.html");
 
 pub unsafe fn is_open() -> bool {
-    !HWND_DASH.is_null() && IsWindow(HWND_DASH) != 0
+    let h = dash_hwnd();
+    !h.is_null() && IsWindow(h) != 0
 }
 
 pub unsafe fn on_data_changed() {
@@ -32,10 +36,11 @@ pub unsafe fn on_data_changed() {
 
 pub unsafe fn open(_owner: HWND) {
     if is_open() {
-        if GetWindowLongW(HWND_DASH, GWL_STYLE) & WS_MINIMIZE as i32 != 0 {
-            ShowWindow(HWND_DASH, SW_RESTORE);
+        let h = dash_hwnd();
+        if GetWindowLongW(h, GWL_STYLE) & WS_MINIMIZE as i32 != 0 {
+            ShowWindow(h, SW_RESTORE);
         }
-        SetForegroundWindow(HWND_DASH);
+        SetForegroundWindow(h);
         return;
     }
 
@@ -50,7 +55,7 @@ pub unsafe fn open(_owner: HWND) {
         hInstance: instance,
         hIcon: null_mut(),
         hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-        hbrBackground: HBR_BG,
+        hbrBackground: hbr_bg(),
         lpszMenuName: std::ptr::null(),
         lpszClassName: class_name,
         hIconSm: null_mut(),
@@ -74,16 +79,17 @@ pub unsafe fn open(_owner: HWND) {
     };
 
     let ex_style = if cfg.dashboard_on_top { WS_EX_TOPMOST } else { 0 };
-    HWND_DASH = CreateWindowExW(
+    let hwnd = CreateWindowExW(
         ex_style, class_name, w!("Dashboard"),
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         x, y, dw, dh,
         null_mut(), null_mut(), instance, std::ptr::null(),
     );
-    SetWindowPos(HWND_DASH, HWND_TOP, 0, 0, 0, 0,
+    HWND_DASH.store(hwnd, Ordering::Relaxed);
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-    UpdateWindow(HWND_DASH);
-    SetForegroundWindow(HWND_DASH);
+    UpdateWindow(hwnd);
+    SetForegroundWindow(hwnd);
 
     // Mark dashboard as open so the next launch can auto-restore.
     let mut cfg = crate::config_store::load();
@@ -266,7 +272,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                     let _ = crate::config_store::save(&cfg);
                 }
                 WEBVIEW.with(|c| { c.borrow_mut().take(); });
-                HWND_DASH = null_mut();
+                HWND_DASH.store(null_mut(), Ordering::Relaxed);
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
