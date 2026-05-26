@@ -114,13 +114,32 @@
     margin-left: 6px;
   }
 
-  /* Bottom button row */
+  /* Top bar — destructive actions live here so they don't compete with
+     the commit buttons in the footer. */
+  .top-bar {
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 18px 0;
+  }
+  .link-button {
+    background: transparent;
+    border: none;
+    color: var(--fg-dim);
+    font-size: 12px;
+    padding: 4px 6px;
+    cursor: pointer;
+    min-width: 0;
+    text-decoration: underline;
+  }
+  .link-button:hover { color: var(--fg); }
+
+  /* Bottom button row — commit actions only, right-aligned. */
   .buttons {
     border-top: 1px solid var(--border);
     padding: 12px 22px;
     background: var(--bg);
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 8px;
   }
   button {
@@ -137,13 +156,15 @@
   button:hover  { background: #2e2e2e; }
   button:active { background: var(--surface); }
   button.primary { color: var(--green); }
-  button.danger  { background: #aa0000; border-color: #aa0000; color: white; }
-  button.danger:hover { background: #c40000; }
 </style>
 </head>
 <body>
 <div class="container">
   <div class="scroll">
+
+    <div class="top-bar">
+      <button id="btn-reset" class="link-button" type="button">Reset to defaults</button>
+    </div>
 
     <div class="section">
       <h3>General</h3>
@@ -245,12 +266,8 @@
   </div>
 
   <div class="buttons">
-    <button id="btn-reset" class="danger">Reset to Defaults</button>
-    <div style="display:flex; gap:8px">
-      <button id="btn-cancel">Cancel</button>
-      <button id="btn-apply">Apply</button>
-      <button id="btn-saveexit" class="primary">Save &amp; Exit</button>
-    </div>
+    <button id="btn-apply">Apply</button>
+    <button id="btn-saveexit" class="primary">Save &amp; Exit</button>
   </div>
   <div id="status-bar" style="padding:6px 22px; background:#1e1e1e; border-top:1px solid #333; font-size:11px; color:#888; min-height:18px"></div>
 </div>
@@ -321,15 +338,14 @@
 
   function apply()        { postCmd({ cmd: 'apply',     cfg: collectConfig() }); }
   function saveAndExit()  { postCmd({ cmd: 'save_exit', cfg: collectConfig() }); }
-  function cancel()       { postCmd({ cmd: 'cancel' }); }
   function resetDefaults(){ if (confirm('Reset all settings to defaults?')) postCmd({ cmd: 'reset_defaults' }); }
 
   // Bind via addEventListener (inline onclick can be blocked by WebView2's
-  // default CSP).
+  // default CSP). The native title bar X closes the window — same effect
+  // as the old Cancel button, since edits never commit without Apply.
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-apply').addEventListener('click', apply);
     document.getElementById('btn-saveexit').addEventListener('click', saveAndExit);
-    document.getElementById('btn-cancel').addEventListener('click', cancel);
     document.getElementById('btn-reset').addEventListener('click', resetDefaults);
   });
 

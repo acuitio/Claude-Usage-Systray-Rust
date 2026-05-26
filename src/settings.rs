@@ -11,6 +11,7 @@ use windows_sys::w;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::common::*;
@@ -129,7 +130,6 @@ fn handle_ipc(req: wry::http::Request<String>) {
             }
             close_window();
         }
-        "cancel" => close_window(),
         "reset_defaults" => {
             let defaults = AppConfig::default();
             if let Ok(json) = serde_json::to_string(&defaults) {
@@ -201,6 +201,19 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                 0
             }
             WM_DPICHANGED => { handle_dpi_changed(hwnd, lp); 0 }
+            // Floor the resize-track size so the user can't shrink the
+            // window below what the footer buttons need to render. Logical
+            // pixels scaled by current monitor DPI.
+            WM_GETMINMAXINFO => {
+                let mmi = lp as *mut MINMAXINFO;
+                if !mmi.is_null() {
+                    let dpi = GetDpiForWindow(hwnd).max(96);
+                    let scale = dpi as f32 / 96.0;
+                    (*mmi).ptMinTrackSize.x = (500.0 * scale) as i32;
+                    (*mmi).ptMinTrackSize.y = (400.0 * scale) as i32;
+                }
+                0
+            }
             WM_CLOSE => { DestroyWindow(hwnd); 0 }
             WM_DESTROY => {
                 WEBVIEW.with(|c| { c.borrow_mut().take(); });
