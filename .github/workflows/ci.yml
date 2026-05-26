@@ -36,3 +36,11 @@ jobs:
 
       - name: Test
         run: cargo test --release --locked
+
+      - name: Upload release exe
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeUsageSystray-${{ github.sha }}
+          path: target/release/ClaudeUsageSystray.exe
+          if-no-files-found: error
