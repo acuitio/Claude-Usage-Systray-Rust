@@ -14,14 +14,24 @@ jobs:
   build:
     runs-on: windows-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       # Note: cargo fmt --check is intentionally not run. The codebase uses a
       # deliberately compact style (single-line short fns, multi-field-per-line
@@ -29,18 +39,22 @@ jobs:
       # reformat + a tuned rustfmt.toml as a "prep for publish" step later.
 
       - name: Clippy
-        run: cargo clippy --all-targets --release -- -D warnings
+        run: cargo clippy --all-targets --release --target ${{ matrix.target }} -- -D warnings
 
       - name: Build (release)
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
+      # Tests only run on x64 — the runner is x64, so cross-compiled aarch64
+      # binaries get built but can't execute. Clippy still ran above against
+      # the aarch64 target, which catches compile-time issues for that arch.
       - name: Test
-        run: cargo test --release --locked
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo test --release --locked --target ${{ matrix.target }}
 
       - name: Upload release exe
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: ClaudeUsageSystray-${{ github.sha }}
-          path: target/release/ClaudeUsageSystray.exe
+          name: ClaudeUsageSystray-${{ matrix.target }}-${{ github.sha }}
+          path: target/${{ matrix.target }}/release/ClaudeUsageSystray.exe
           if-no-files-found: error
