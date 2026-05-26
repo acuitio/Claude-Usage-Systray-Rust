@@ -20,7 +20,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use windows_sys::core::GUID;
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::Graphics::GdiPlus::*;
+use windows_sys::Win32::Graphics::Gdi::HBITMAP;
+// GdiPlus glob can't be used here — it pulls in `Status::Ok` as `const i32 = 0`,
+// which shadows `Result::Ok` and breaks every `Ok(...)`/`Err(...)` literal.
+use windows_sys::Win32::Graphics::GdiPlus::{
+    GdipCreateBitmapFromHBITMAP, GdipDisposeImage, GdipSaveImageToFile, GpBitmap, GpImage,
+};
 use windows_sys::Win32::System::DataExchange::*;
 use windows_sys::Win32::System::Memory::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
