@@ -12,7 +12,7 @@
 // worker so the UI stays responsive.
 
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -159,7 +159,7 @@ unsafe fn snapshot_cf_dib() -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-unsafe fn save_hbitmap_as_png(hbm: HBITMAP, dest: &PathBuf) -> Result<(), String> {
+unsafe fn save_hbitmap_as_png(hbm: HBITMAP, dest: &Path) -> Result<(), String> {
     let mut bitmap: *mut GpBitmap = null_mut();
     let st = GdipCreateBitmapFromHBITMAP(hbm, null_mut(), &mut bitmap);
     if st != 0 || bitmap.is_null() {
