@@ -60,7 +60,7 @@ impl Default for AppConfig {
             show_sonnet: true,
             dashboard_on_top: true,
             display_mode: "tray".into(),
-            overlay_format: "{session}  |  {weekly}  |  {sonnet}".into(),
+            overlay_format: "5-hour: {session} {s_reset}  |  Weekly: {weekly} {w_reset}  |  Sonnet: {sonnet}".into(),
             overlay_opacity: 85,
             font_family: "Segoe UI".into(),
             widget_x: None,
@@ -89,7 +89,7 @@ fn default_true()                  -> bool   { true }
 fn default_scale_pct()             -> i32    { 100 }
 fn default_poll_sec()              -> i32    { 300 }
 fn default_tray()                  -> String { "tray".into() }
-fn default_overlay_fmt()           -> String { "{session}  |  {weekly}  |  {sonnet}".into() }
+fn default_overlay_fmt()           -> String { "5-hour: {session} {s_reset}  |  Weekly: {weekly} {w_reset}  |  Sonnet: {sonnet}".into() }
 fn default_opacity()               -> i32    { 85 }
 fn default_font()                  -> String { "Segoe UI".into() }
 fn default_bg()                    -> String { "#1e1e2e".into() }
