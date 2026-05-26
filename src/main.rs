@@ -25,6 +25,7 @@ mod config_store;
 mod cooldown;
 mod credentials;
 mod dashboard;
+mod imgpaste;
 mod models;
 mod oauth_refresh;
 mod overlay;
@@ -118,6 +119,10 @@ fn main() {
 
         tray::install(host);
 
+        // Register the imgpaste global hotkey against this same host window.
+        // Failures are non-fatal — they get logged to imgpaste.log.
+        imgpaste::register_hotkey(host);
+
         // Schedule the registry self-patch ~1.5 s after the icon registers,
         // matching the C# port. Windows writes the partial NotifyIconSettings
         // entry lazily; the timer gives it time to land before we patch.
@@ -157,6 +162,12 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             return 0;
         }
         match msg {
+            WM_HOTKEY => {
+                if wp as i32 == imgpaste::HOTKEY_ID {
+                    imgpaste::handle_hotkey();
+                }
+                0
+            }
             WM_TIMER => {
                 if wp == TIMER_PATCH {
                     KillTimer(hwnd, TIMER_PATCH);
@@ -169,7 +180,11 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                 }
                 0
             }
-            WM_DESTROY => { PostQuitMessage(0); 0 }
+            WM_DESTROY => {
+                imgpaste::unregister_hotkey(hwnd);
+                PostQuitMessage(0);
+                0
+            }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
         }
     }

@@ -20,6 +20,7 @@ const ID_MENU_OVERLAY:   u16 = 9002;
 const ID_MENU_REFRESH:   u16 = 9003;
 const ID_MENU_SETTINGS:  u16 = 9004;
 const ID_MENU_CHART:     u16 = 9006;
+const ID_MENU_IMGPASTE:   u16 = 9007;
 const ID_MENU_QUIT:      u16 = 9005;
 
 // The hidden host window that receives our tray callback. Set once at
@@ -79,6 +80,10 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
         AppendMenuW(menu, MF_STRING, ID_MENU_SETTINGS as usize, w!("Settings"));
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
+        AppendMenuW(menu, MF_STRING, ID_MENU_IMGPASTE as usize,
+            w!("Send Clipboard Image\tAlt+Shift+V"));
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+
         AppendMenuW(menu, MF_STRING, ID_MENU_QUIT as usize, w!("Quit"));
 
         SetForegroundWindow(host);
@@ -94,6 +99,7 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
             ID_MENU_REFRESH   => { crate::poll_service::trigger_refresh(); }
             ID_MENU_CHART     => chart::open(host),
             ID_MENU_SETTINGS  => settings::open(host),
+            ID_MENU_IMGPASTE   => crate::imgpaste::handle_hotkey(),
             ID_MENU_QUIT      => { remove(); PostQuitMessage(0); }
             _ => {}
         }

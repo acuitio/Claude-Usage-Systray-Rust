@@ -37,6 +37,13 @@ pub struct AppConfig {
     #[serde(default)]                         pub dashboard_y: Option<i32>,
     #[serde(default)]                         pub dashboard_w: Option<i32>,
     #[serde(default)]                         pub dashboard_h: Option<i32>,
+    // imgpaste — Alt+Shift+V scps the clipboard image to the remote and
+    // pastes the resulting path into the focused window. See src/imgpaste.rs.
+    #[serde(default = "default_true")]        pub imgpaste_enabled: bool,
+    #[serde(default = "default_imgpaste_host")] pub imgpaste_host: String,
+    #[serde(default = "default_imgpaste_dir")] pub imgpaste_remote_dir: String,
+    #[serde(default = "default_imgpaste_mods")] pub imgpaste_hotkey_mods: u32,
+    #[serde(default = "default_imgpaste_vk")]  pub imgpaste_hotkey_vk: u32,
 }
 
 impl Default for AppConfig {
@@ -68,6 +75,11 @@ impl Default for AppConfig {
             dashboard_y: None,
             dashboard_w: None,
             dashboard_h: None,
+            imgpaste_enabled: true,
+            imgpaste_host: "gx10".into(),
+            imgpaste_remote_dir: "/tmp".into(),
+            imgpaste_hotkey_mods: 0x0005,  // MOD_ALT | MOD_SHIFT
+            imgpaste_hotkey_vk:   0x56,    // 'V'
         }
     }
 }
@@ -85,6 +97,10 @@ fn default_suf()                   -> String { "#64c864".into() }
 fn default_part()                  -> String { "#e6c832".into() }
 fn default_depl()                  -> String { "#e65050".into() }
 fn default_text()                  -> String { "#ffffff".into() }
+fn default_imgpaste_host()          -> String { "gx10".into() }
+fn default_imgpaste_dir()           -> String { "/tmp".into() }
+fn default_imgpaste_mods()          -> u32    { 0x0005 }  // MOD_ALT | MOD_SHIFT
+fn default_imgpaste_vk()            -> u32    { 0x56 }    // 'V'
 
 // ─── Anthropic usage API response shape ──────────────────────────────
 
