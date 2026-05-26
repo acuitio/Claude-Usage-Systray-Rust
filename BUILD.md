@@ -1,5 +1,26 @@
 # Build & Run
 
+## Quickest path: download prebuilt binaries from CI
+
+You don't need to install anything if you only want to run the app.
+Every push to `main` produces both an x64 and an ARM64 `.exe` as a
+GitHub Actions workflow artifact. Grab the latest:
+
+```powershell
+gh run list --workflow=ci.yml --branch=main --limit=1
+# note the run id from the first column, then:
+gh run download <run-id> --dir dist
+```
+
+You'll get two directories named
+`ClaudeUsageSystray-x86_64-pc-windows-msvc-<sha>/` and
+`ClaudeUsageSystray-aarch64-pc-windows-msvc-<sha>/`, each containing a
+single `ClaudeUsageSystray.exe`. Pick the one matching your CPU
+architecture. To check your machine's architecture:
+`(Get-WmiObject Win32_Processor).Architecture` (9 = x64, 12 = ARM64).
+
+The rest of this document is for building locally.
+
 ## Prerequisites
 
 ```powershell
@@ -42,14 +63,26 @@ no .NET or VC runtime required (the C runtime is statically linked).
 Right-click the tray icon for Dashboard / Overlay (toggle) / Refresh
 Now / Settings / Quit.
 
-## Cross-compile (future)
+## Cross-compile to ARM64
 
-`win-x64` is the default target on Windows. ARM64 Windows is:
+CI already produces ARM64 binaries on every push to `main` — see
+"Quickest path" at the top. To build ARM64 locally:
 
 ```powershell
 rustup target add aarch64-pc-windows-msvc
 cargo build --release --target aarch64-pc-windows-msvc
 ```
+
+Output lands at
+`target\aarch64-pc-windows-msvc\release\ClaudeUsageSystray.exe` (note
+the extra path segment when `--target` is explicit). You can build this
+from an x64 machine — MSVC's linker emits ARM64 PE binaries
+cross-arch. The resulting `.exe` runs natively on ARM64 Windows (Surface
+Pro X, Copilot+ PCs) without the x64-on-ARM emulator penalty.
+
+The x64 build also runs on ARM64 Windows via Microsoft's emulator, just
+slower and more battery-hungry. For a long-lived tray app, prefer the
+native build when running on ARM hardware.
 
 ## Why so many Win32 features in Cargo.toml?
 

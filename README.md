@@ -6,13 +6,16 @@ self-contained, no runtime install required on the target machine.
 
 ## Status
 
-**Feature-complete vs. the C# port** (one known gap: per-window
-AppUserModelID grouping under one taskbar button — skipped because it
-requires `IPropertyStore` COM interop, which is rough in `windows-sys`).
+**Feature-complete vs. the C# port**, plus the imgpaste feature below
+which doesn't exist in the C# or Python siblings. One known gap:
+per-window AppUserModelID grouping under one taskbar button — skipped
+because it requires `IPropertyStore` COM interop, which is rough in
+`windows-sys`.
 
 What's implemented:
 - Tray icon with right-click menu (Dashboard / Overlay toggle / Refresh
-  Now / Usage Chart / Settings / Quit), checkmarks on toggleable items.
+  Now / Usage Chart / Settings / **Send Clipboard Image** / Quit),
+  checkmarks on toggleable items.
 - Dashboard window — real plan + cache age + three usage bars with
   per-bar reset times derived from ISO timestamps.
 - Overlay — layered window, per-pixel alpha, drag-to-move, position
@@ -32,6 +35,49 @@ What's implemented:
 - `WM_DPICHANGED` handler for moves between monitors.
 - Windows 11 Settings → Other system tray icons self-patch (registry).
 - Startup-on-login via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+- **imgpaste — `Alt+Shift+V` uploads the clipboard image over SCP and
+  pastes the resulting remote path into the focused window.** See
+  the "imgpaste" section below.
+
+## imgpaste — clipboard image over SSH
+
+When you press `Alt+Shift+V` (or pick "Send Clipboard Image" from the
+tray menu), the app:
+
+1. Reads the bitmap currently on the Windows clipboard.
+2. Saves it to `%TEMP%\imgpaste-<unix_ns>.png` via GDI+.
+3. Shells out to `scp.exe` to upload it as
+   `<host>:<remote_dir>/imgpaste-<unix_secs>.png`.
+4. Writes the resulting remote path back to the clipboard as text and
+   synthesises `Ctrl+V` against the focused window.
+5. Restores the user's original clipboard image afterwards.
+
+The intended use case: paste a screenshot into a `claude` CLI session
+running over SSH. The keystrokes carry the *path* through your existing
+terminal; SCP carries the *bytes* through a separate transient SSH
+session; the two converge when Claude Code opens the file by path.
+
+Config lives in `app_state.json`:
+
+| Field | Default | Notes |
+|---|---|---|
+| `imgpaste_enabled` | `true` | Set `false` to skip hotkey registration |
+| `imgpaste_host` | `"gx10"` | Any `ssh`-resolvable host (`~/.ssh/config` honored) |
+| `imgpaste_remote_dir` | `"/tmp"` | Created on demand by the remote side |
+| `imgpaste_hotkey_mods` | `0x0005` | `MOD_ALT \| MOD_SHIFT` |
+| `imgpaste_hotkey_vk` | `0x56` | `'V'` |
+
+Env vars override config at startup for ad-hoc one-shots:
+`IMGPASTE_HOST`, `IMGPASTE_REMOTE_DIR`.
+
+**Prerequisites on the host running this app:**
+- OpenSSH client (provides `scp.exe`). Built into Windows 11; on
+  Windows 10 add it via `Settings → Apps → Optional features →
+  OpenSSH Client`.
+- Working passwordless SSH to the configured host (key in
+  `~/.ssh/authorized_keys` on the remote, or `ssh-agent` loaded).
+- Failures are logged to `imgpaste.log` in the app's config dir;
+  they never crash the tray.
 
 See [BUILD.md](BUILD.md) for how to build and run.
 
@@ -61,8 +107,9 @@ src/
 ├── tray.rs        — Shell_NotifyIcon + runtime-drawn icon + popup menu
 ├── overlay.rs     — WS_EX_LAYERED + UpdateLayeredWindow (per-pixel alpha)
 ├── dashboard.rs   — owner-drawn window with three usage bars
-└── settings.rs    — controls dialog (BUTTON / COMBOBOX / EDIT / UPDOWN
-                    + ChooseColor)
+├── settings.rs    — controls dialog (BUTTON / COMBOBOX / EDIT / UPDOWN
+│                    + ChooseColor)
+└── imgpaste.rs    — clipboard image → SCP upload → SendInput(Ctrl+V)
 ```
 
 ## Known limitations
@@ -91,9 +138,16 @@ src/
 
 ## Build numbers (release, AOT-equivalent)
 
-- `ClaudeUsageSystray.exe`: **~1.5 MB** (single binary; no .NET runtime
-  required on the target)
-- Runtime RAM (tray app idle): ~13 MB
+CI produces both architectures on every push to `main`:
+
+| Target | Triple | Binary size | Runtime RAM (idle) |
+|---|---|---|---|
+| Intel/AMD 64-bit | `x86_64-pc-windows-msvc` | ~885 KB | ~13 MB |
+| ARM64 | `aarch64-pc-windows-msvc` | ~849 KB | ~13 MB |
+
+Single binary in each case — no .NET runtime, no VC runtime, no
+WebView2 prerequisite (downloaded on first launch if not already
+present). Copy and run.
 
 Note: the C# port ships a separate `ClaudeUsageCollector.exe` for
 headless polling when the tray isn't running. The Rust port skips it
