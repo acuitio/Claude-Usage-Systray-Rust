@@ -153,14 +153,21 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
     // background_collection fields. Replacing the whole AppConfig on Apply
     // would wipe them. Merge: take the form fields from `new_cfg`, keep the
     // non-form fields from `old_cfg`.
+    //
+    // The three imgpaste hotkey/enabled fields aren't editable in the UI
+    // yet either — preserve them so Apply doesn't silently reset them to
+    // defaults via serde when the JS payload omits them.
     let merged = AppConfig {
-        widget_x:       old_cfg.widget_x,
-        widget_y:       old_cfg.widget_y,
-        dashboard_open: old_cfg.dashboard_open,
-        dashboard_x:    old_cfg.dashboard_x,
-        dashboard_y:    old_cfg.dashboard_y,
-        dashboard_w:    old_cfg.dashboard_w,
-        dashboard_h:    old_cfg.dashboard_h,
+        widget_x:             old_cfg.widget_x,
+        widget_y:             old_cfg.widget_y,
+        dashboard_open:       old_cfg.dashboard_open,
+        dashboard_x:          old_cfg.dashboard_x,
+        dashboard_y:          old_cfg.dashboard_y,
+        dashboard_w:          old_cfg.dashboard_w,
+        dashboard_h:          old_cfg.dashboard_h,
+        imgpaste_enabled:     old_cfg.imgpaste_enabled,
+        imgpaste_hotkey_mods: old_cfg.imgpaste_hotkey_mods,
+        imgpaste_hotkey_vk:   old_cfg.imgpaste_hotkey_vk,
         ..new_cfg
     };
 
