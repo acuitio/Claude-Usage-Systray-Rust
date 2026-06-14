@@ -41,6 +41,42 @@ thread_local! {
     static ICON_CACHE: RefCell<Option<IconCache>> = const { RefCell::new(None) };
 }
 
+// ─── Transfer indicator state ─────────────────────────────────────────
+// While imgpaste/imgpull move bytes, the tray icon temporarily shows a
+// directional arrow (pulsing) instead of the usage bars, then flashes a
+// check/cross on completion before reverting. Worker threads signal phase
+// changes via PostMessage(WM_XFER_STATE) to the host window; everything below
+// runs on the UI thread that owns the icon.
+
+/// Posted by imgpaste/imgpull worker threads to drive the indicator.
+pub const WM_XFER_STATE: u32 = WM_APP + 3;
+// wParam codes for WM_XFER_STATE.
+pub const XFER_PUSH_BEGIN: usize = 0;
+pub const XFER_PULL_BEGIN: usize = 1;
+pub const XFER_END_OK:     usize = 2;
+pub const XFER_END_FAIL:   usize = 3;
+/// Timer id (on the host window) driving the pulse + auto-revert.
+pub const TIMER_XFER: usize = 2;
+
+// Number of ~250ms ticks the success/failure flash stays up before reverting.
+const DONE_TICKS: u32 = 7;
+
+#[derive(Clone, Copy)]
+enum XferDir { Push, Pull }
+
+#[derive(Clone, Copy)]
+enum XferPhase { Active, Done { ok: bool } }
+
+struct Xfer {
+    dir:   XferDir,
+    phase: XferPhase,
+    frame: u32,
+    icon:  HICON, // the xfer HICON we currently own; destroyed on replace/clear
+}
+thread_local! {
+    static XFER: RefCell<Option<Xfer>> = const { RefCell::new(None) };
+}
+
 pub unsafe fn install(host: HWND) {
     TRAY_HWND.store(host, Ordering::Relaxed);
 
@@ -115,6 +151,9 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
 pub unsafe fn refresh() {
     let host = TRAY_HWND.load(Ordering::Relaxed);
     if host.is_null() { return; }
+    // A transfer indicator is showing — don't stomp it with the usage icon.
+    // The indicator restores the usage icon itself when it reverts to idle.
+    if XFER.with(|c| c.borrow().is_some()) { return; }
     let usage = current_snapshot();
     let icon  = get_or_build_icon(usage.session_pct);
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
@@ -255,4 +294,202 @@ unsafe fn build_tray_icon(pct: f64) -> HICON {
     DeleteObject(bmp as HGDIOBJ);
     DeleteObject(mask as HGDIOBJ);
     icon
+}
+
+// ─── Transfer indicator: signalling + lifecycle ───────────────────────
+
+/// Called from worker threads to post a phase change to the UI thread. Safe to
+/// call before the tray icon exists (no-op).
+pub fn signal_xfer(code: usize) {
+    let host = TRAY_HWND.load(Ordering::Relaxed);
+    if !host.is_null() {
+        unsafe { PostMessageW(host, WM_XFER_STATE, code, 0); }
+    }
+}
+
+/// Host-window handler for WM_XFER_STATE (runs on the UI thread).
+pub unsafe fn on_xfer_message(host: HWND, code: WPARAM) {
+    match code {
+        XFER_PUSH_BEGIN => xfer_begin(host, XferDir::Push),
+        XFER_PULL_BEGIN => xfer_begin(host, XferDir::Pull),
+        XFER_END_OK     => xfer_end(host, true),
+        XFER_END_FAIL   => xfer_end(host, false),
+        _ => {}
+    }
+}
+
+unsafe fn xfer_begin(host: HWND, dir: XferDir) {
+    clear_xfer_icon();
+    XFER.with(|c| {
+        *c.borrow_mut() = Some(Xfer { dir, phase: XferPhase::Active, frame: 0, icon: null_mut() });
+    });
+    let tip = match dir { XferDir::Push => "Sending…", XferDir::Pull => "Fetching…" };
+    render_xfer(host, Some(tip));
+    SetTimer(host, TIMER_XFER, 250, None);
+}
+
+unsafe fn xfer_end(host: HWND, ok: bool) {
+    XFER.with(|c| {
+        let mut slot = c.borrow_mut();
+        match slot.as_mut() {
+            Some(x) => { x.phase = XferPhase::Done { ok }; x.frame = 0; }
+            // End without a matching begin (e.g. the begin message was missed)
+            // — flash the result anyway. Direction is irrelevant for the flash.
+            None => *slot = Some(Xfer {
+                dir: XferDir::Push, phase: XferPhase::Done { ok }, frame: 0, icon: null_mut(),
+            }),
+        }
+    });
+    render_xfer(host, Some(if ok { "Done" } else { "Failed" }));
+    SetTimer(host, TIMER_XFER, 250, None); // ensure the auto-revert timer runs
+}
+
+/// Host-window WM_TIMER handler for TIMER_XFER.
+pub unsafe fn xfer_tick(host: HWND) {
+    enum Act { None, Pulse, Revert }
+    let act = XFER.with(|c| {
+        let mut slot = c.borrow_mut();
+        match slot.as_mut() {
+            None => Act::Revert, // stray tick — make sure the timer dies
+            Some(x) => {
+                x.frame += 1;
+                match x.phase {
+                    XferPhase::Active => Act::Pulse,
+                    XferPhase::Done { .. } if x.frame >= DONE_TICKS => Act::Revert,
+                    XferPhase::Done { .. } => Act::None,
+                }
+            }
+        }
+    });
+    match act {
+        Act::Pulse  => render_xfer(host, None),
+        Act::Revert => {
+            clear_xfer_icon();
+            KillTimer(host, TIMER_XFER);
+            refresh(); // XFER is now empty, so this restores the usage icon
+        }
+        Act::None => {}
+    }
+}
+
+/// Destroy and forget the owned xfer HICON, clearing the state.
+unsafe fn clear_xfer_icon() {
+    XFER.with(|c| {
+        if let Some(x) = c.borrow_mut().take() {
+            if !x.icon.is_null() { DestroyIcon(x.icon); }
+        }
+    });
+}
+
+/// Render the current xfer state into the tray icon (NIM_MODIFY), replacing
+/// and destroying the previously owned HICON.
+unsafe fn render_xfer(host: HWND, tip: Option<&str>) {
+    XFER.with(|c| {
+        let mut slot = c.borrow_mut();
+        if let Some(x) = slot.as_mut() {
+            let icon = build_xfer_icon(x.dir, x.phase, x.frame);
+            let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+            nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+            nid.hWnd   = host;
+            nid.uID    = 1;
+            nid.uFlags = NIF_ICON;
+            nid.hIcon  = icon;
+            if let Some(t) = tip {
+                nid.uFlags |= NIF_TIP;
+                fill_wide(&mut nid.szTip, t);
+            }
+            Shell_NotifyIconW(NIM_MODIFY, &nid);
+            if !x.icon.is_null() { DestroyIcon(x.icon); }
+            x.icon = icon;
+        }
+    });
+}
+
+/// Render a 64×64 indicator icon: a solid phase-colored square with a white
+/// arrow (transferring), check (success), or cross (failure).
+unsafe fn build_xfer_icon(dir: XferDir, phase: XferPhase, frame: u32) -> HICON {
+    let hdc_screen = GetDC(null_mut());
+    let hdc_mem    = CreateCompatibleDC(hdc_screen);
+    let bmp        = CreateCompatibleBitmap(hdc_screen, 64, 64);
+    let old_bmp    = SelectObject(hdc_mem, bmp as HGDIOBJ);
+
+    // Background color by phase (COLORREF = 0x00BBGGRR). Active pulses between
+    // two blues on alternating frames.
+    let bg = match phase {
+        XferPhase::Active => if frame % 2 == 0 { 0x00E6_5F2D } else { 0x0096_3C1E },
+        XferPhase::Done { ok: true }  => 0x0046_AA28, // green
+        XferPhase::Done { ok: false } => 0x0032_32C8, // red
+    };
+    let brush_bg = CreateSolidBrush(bg);
+    let rc = RECT { left: 0, top: 0, right: 64, bottom: 64 };
+    FillRect(hdc_mem, &rc, brush_bg);
+    DeleteObject(brush_bg as HGDIOBJ);
+
+    match phase {
+        XferPhase::Active => draw_arrow(hdc_mem, matches!(dir, XferDir::Push)),
+        XferPhase::Done { ok: true }  => draw_check(hdc_mem),
+        XferPhase::Done { ok: false } => draw_cross(hdc_mem),
+    }
+
+    SelectObject(hdc_mem, old_bmp);
+    DeleteDC(hdc_mem);
+    ReleaseDC(null_mut(), hdc_screen);
+
+    let mut mask_bits: [u8; 64 * 64 / 8] = [0; 64 * 64 / 8];
+    let mask = CreateBitmap(64, 64, 1, 1, mask_bits.as_mut_ptr() as _);
+    let ii = ICONINFO {
+        fIcon: 1, xHotspot: 0, yHotspot: 0,
+        hbmMask: mask, hbmColor: bmp,
+    };
+    let icon = CreateIconIndirect(&ii);
+    DeleteObject(bmp as HGDIOBJ);
+    DeleteObject(mask as HGDIOBJ);
+    icon
+}
+
+const XFER_WHITE: u32 = 0x00FF_FFFF;
+
+/// Filled white arrow (7-point polygon) pointing up (push) or down (pull).
+unsafe fn draw_arrow(hdc: HDC, up: bool) {
+    let pts: [POINT; 7] = if up {
+        [ POINT { x: 32, y: 6 },  POINT { x: 54, y: 30 }, POINT { x: 42, y: 30 },
+          POINT { x: 42, y: 54 }, POINT { x: 22, y: 54 }, POINT { x: 22, y: 30 },
+          POINT { x: 10, y: 30 } ]
+    } else {
+        [ POINT { x: 32, y: 58 }, POINT { x: 54, y: 34 }, POINT { x: 42, y: 34 },
+          POINT { x: 42, y: 10 }, POINT { x: 22, y: 10 }, POINT { x: 22, y: 34 },
+          POINT { x: 10, y: 34 } ]
+    };
+    let brush = CreateSolidBrush(XFER_WHITE);
+    let pen   = CreatePen(PS_SOLID, 1, XFER_WHITE);
+    let ob = SelectObject(hdc, brush as HGDIOBJ);
+    let op = SelectObject(hdc, pen as HGDIOBJ);
+    Polygon(hdc, pts.as_ptr(), pts.len() as i32);
+    SelectObject(hdc, ob);
+    SelectObject(hdc, op);
+    DeleteObject(brush as HGDIOBJ);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+/// Thick white check mark.
+unsafe fn draw_check(hdc: HDC) {
+    let pen = CreatePen(PS_SOLID, 9, XFER_WHITE);
+    let op = SelectObject(hdc, pen as HGDIOBJ);
+    MoveToEx(hdc, 14, 34, null_mut());
+    LineTo(hdc, 28, 48);
+    LineTo(hdc, 52, 16);
+    SelectObject(hdc, op);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+/// Thick white cross.
+unsafe fn draw_cross(hdc: HDC) {
+    let pen = CreatePen(PS_SOLID, 9, XFER_WHITE);
+    let op = SelectObject(hdc, pen as HGDIOBJ);
+    MoveToEx(hdc, 16, 16, null_mut());
+    LineTo(hdc, 48, 48);
+    MoveToEx(hdc, 48, 16, null_mut());
+    LineTo(hdc, 16, 48);
+    SelectObject(hdc, op);
+    DeleteObject(pen as HGDIOBJ);
 }

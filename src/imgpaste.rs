@@ -98,8 +98,13 @@ pub fn handle_hotkey() {
         }
     };
     std::thread::spawn(move || {
-        if let Err(e) = run_upload_and_paste(prepared) {
-            log(&format!("upload+paste: {e}"));
+        crate::tray::signal_xfer(crate::tray::XFER_PUSH_BEGIN);
+        match run_upload_and_paste(prepared) {
+            Ok(()) => crate::tray::signal_xfer(crate::tray::XFER_END_OK),
+            Err(e) => {
+                log(&format!("upload+paste: {e}"));
+                crate::tray::signal_xfer(crate::tray::XFER_END_FAIL);
+            }
         }
         IN_FLIGHT.store(false, Ordering::SeqCst);
     });

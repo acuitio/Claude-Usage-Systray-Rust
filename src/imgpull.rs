@@ -103,15 +103,20 @@ pub fn handle_hotkey() {
     }
 
     std::thread::spawn(move || {
+        crate::tray::signal_xfer(crate::tray::XFER_PULL_BEGIN);
         match run_pull(&path) {
-            Ok(name) => unsafe {
-                crate::tray::notify(
-                    "Ready to paste",
-                    &format!("{name} — press Ctrl+V in Explorer, the Desktop, or any folder"),
-                );
-            },
+            Ok(name) => {
+                crate::tray::signal_xfer(crate::tray::XFER_END_OK);
+                unsafe {
+                    crate::tray::notify(
+                        "Ready to paste",
+                        &format!("{name} — press Ctrl+V in Explorer, the Desktop, or any folder"),
+                    );
+                }
+            }
             Err(e) => {
                 log(&format!("pull: {e}"));
+                crate::tray::signal_xfer(crate::tray::XFER_END_FAIL);
                 unsafe { crate::tray::notify("Fetch failed", &e); }
             }
         }

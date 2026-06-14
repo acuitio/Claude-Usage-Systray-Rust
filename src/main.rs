@@ -164,6 +164,10 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             chart::on_data_changed();
             return 0;
         }
+        if msg == tray::WM_XFER_STATE {
+            tray::on_xfer_message(hwnd, wp);
+            return 0;
+        }
         match msg {
             WM_HOTKEY => {
                 let id = wp as i32;
@@ -183,6 +187,8 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                             "Usage",
                         );
                     }
+                } else if wp == tray::TIMER_XFER {
+                    tray::xfer_tick(hwnd);
                 }
                 0
             }
