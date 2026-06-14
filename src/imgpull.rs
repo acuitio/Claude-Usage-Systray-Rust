@@ -14,11 +14,12 @@
 // is just text, with nothing marking it as "fetch me". So an explicit trigger
 // must do the fetch and convert the clipboard from text → files.
 //
-// Path resolution: absolute paths (`/...`) fetch exactly. A leading `~/` is
-// stripped so the rest resolves against the remote home — which is also where
-// scp resolves bare relative paths (the SFTP start dir). The terminal's actual
-// CWD isn't visible to us, so relative-to-CWD paths won't resolve; copy an
-// absolute path for anything outside home.
+// Path resolution: absolute paths (`/...`) fetch exactly. Otherwise the path is
+// relative (a leading `~/` is stripped) and resolves against the configured
+// "pull base dir" if set (Settings → File Transfer), else the remote home
+// (scp's SFTP default). Set the base dir to your usual working dir on the host
+// so paths copied relative to it resolve — the terminal's live CWD isn't
+// visible to us.
 
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
@@ -134,14 +135,24 @@ fn run_pull(remote_path: &str) -> Result<String, String> {
         return Err("imgpaste_host empty (set IMGPASTE_HOST or edit app_state.json)".into());
     }
 
+    let base_raw = std::env::var("IMGPULL_REMOTE_BASE").unwrap_or(cfg.imgpull_remote_base);
+
     // Best-effort cleanup of leftover staging dirs from earlier pulls.
     sweep_stale_temp();
 
-    // scp/SFTP doesn't expand `~`; strip a leading `~/` so the remainder
-    // resolves against the remote home (the SFTP default), matching bare
-    // relative paths. Absolute paths pass through untouched.
-    let remote = remote_path.strip_prefix("~/").unwrap_or(remote_path);
-    let basename = remote_basename(remote);
+    // Resolve the remote path. scp/SFTP doesn't expand `~`, so strip a leading
+    // `~/`. Absolute paths (`/…`) pass through. Anything else is relative: if a
+    // base dir is configured, resolve under it (for paths copied relative to a
+    // working dir the systray can't see); otherwise let scp resolve it against
+    // the remote home (the SFTP default).
+    let base = base_raw.trim();
+    let rel = remote_path.strip_prefix("~/").unwrap_or(remote_path);
+    let remote: String = if rel.starts_with('/') || base.is_empty() {
+        rel.to_string()
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), rel)
+    };
+    let basename = remote_basename(&remote);
     if basename.is_empty() {
         return Err("could not derive a name from the path".into());
     }

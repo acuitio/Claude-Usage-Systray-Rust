@@ -51,6 +51,9 @@ pub struct AppConfig {
     #[serde(default = "default_true")]          pub imgpull_enabled: bool,
     #[serde(default = "default_imgpull_mods")]  pub imgpull_hotkey_mods: u32,
     #[serde(default = "default_imgpull_vk")]    pub imgpull_hotkey_vk: u32,
+    // Remote base dir that *relative* pulled paths resolve against (e.g. your
+    // working dir on the host). Empty = scp's default (the remote home).
+    #[serde(default)]                           pub imgpull_remote_base: String,
 }
 
 impl Default for AppConfig {
@@ -89,7 +92,8 @@ impl Default for AppConfig {
             imgpaste_hotkey_vk:   0x56,    // 'V'
             imgpull_enabled: true,
             imgpull_hotkey_mods: 0x0005,   // MOD_ALT | MOD_SHIFT
-            imgpull_hotkey_vk:   0x44,     // 'D'
+            imgpull_hotkey_vk:   0x43,     // 'C'
+            imgpull_remote_base: String::new(),
         }
     }
 }
@@ -112,7 +116,7 @@ fn default_imgpaste_dir()           -> String { "/tmp".into() }
 fn default_imgpaste_mods()          -> u32    { 0x0005 }  // MOD_ALT | MOD_SHIFT
 fn default_imgpaste_vk()            -> u32    { 0x56 }    // 'V'
 fn default_imgpull_mods()           -> u32    { 0x0005 }  // MOD_ALT | MOD_SHIFT
-fn default_imgpull_vk()             -> u32    { 0x44 }    // 'D'
+fn default_imgpull_vk()             -> u32    { 0x43 }    // 'C'
 
 // ─── Anthropic usage API response shape ──────────────────────────────
 

@@ -303,8 +303,12 @@
         <input type="text" id="imgpaste_host">
       </div>
       <div class="row">
-        <label class="field-label" for="imgpaste_remote_dir">Remote directory</label>
+        <label class="field-label" for="imgpaste_remote_dir">Remote directory (push)</label>
         <input type="text" id="imgpaste_remote_dir">
+      </div>
+      <div class="row">
+        <label class="field-label" for="imgpull_remote_base">Pull base dir (relative paths)</label>
+        <input type="text" id="imgpull_remote_base" placeholder="(blank = remote home)">
       </div>
       <div class="row">
         <label class="field-label" for="imgpaste_hotkey">Send hotkey (push)</label>
@@ -319,7 +323,9 @@
         <kbd>Ctrl</kbd>/<kbd>Alt</kbd>/<kbd>Shift</kbd>/<kbd>Win</kbd> plus a letter,
         number, or F-key. <b>Send</b> ships the clipboard image/files to the host;
         <b>Get</b> pulls a remote path (copied in the terminal) back to the clipboard.
-        Remote directory is where pushed files land; hostname accepts
+        <b>Remote directory</b> is where pushed files land. <b>Pull base dir</b> is what
+        <i>relative</i> pulled paths resolve against (blank = your remote home);
+        absolute paths (<code>/…</code>) ignore it. Hostname accepts
         <code>~/.ssh/config</code> aliases.
       </div>
     </details>
@@ -343,7 +349,7 @@
     'show_depletion_estimates', 'show_last_refresh',
   ];
   const NUMBERS  = ['overlay_opacity', 'scale_pct', 'poll_interval_sec'];
-  const STRINGS  = ['display_mode', 'overlay_format', 'font_family', 'imgpaste_host', 'imgpaste_remote_dir'];
+  const STRINGS  = ['display_mode', 'overlay_format', 'font_family', 'imgpaste_host', 'imgpaste_remote_dir', 'imgpull_remote_base'];
   const COLORS   = ['bg_color', 'color_text', 'color_sufficient', 'color_partial', 'color_depleted'];
 
   // ── Hotkey capture state + helpers ──────────────────────────────────
