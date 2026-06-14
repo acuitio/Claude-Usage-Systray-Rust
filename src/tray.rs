@@ -93,6 +93,12 @@ pub unsafe fn install(host: HWND) {
     Shell_NotifyIconW(NIM_ADD, &nid);
 }
 
+/// The hidden host (message-only) window that owns the tray icon and receives
+/// posted messages. Exposed so Settings can re-register hotkeys against it.
+pub fn host_hwnd() -> HWND {
+    TRAY_HWND.load(Ordering::Relaxed)
+}
+
 pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
     let event = (lp & 0xffff) as u32;
     if event == WM_RBUTTONUP || event == WM_LBUTTONUP {
