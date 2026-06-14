@@ -81,7 +81,7 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
         AppendMenuW(menu, MF_STRING, ID_MENU_IMGPASTE as usize,
-            w!("Send Clipboard Image\tAlt+Shift+V"));
+            w!("Send Clipboard Image/Files\tAlt+Shift+V"));
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
         AppendMenuW(menu, MF_STRING, ID_MENU_QUIT as usize, w!("Quit"));

@@ -1,11 +1,17 @@
-// Clipboard-image SSH uploader. Alt+Shift+V grabs whatever image is sitting
-// on the Windows clipboard, scps it to the configured remote as
-// `<remote_dir>/imgpaste-<unix-ts>.png`, then synthesizes Ctrl+V to paste
-// the remote path into the focused window. Drops straight into a terminal
-// running Claude Code over SSH (the path travels through your existing
-// SSH session as keystrokes; the image file travels via SCP through a
-// separate transient SSH session — they converge at Claude Code when it
-// opens the file by path).
+// Clipboard → remote SSH uploader, bound to Alt+Shift+V. Handles two kinds
+// of clipboard payload and pastes the resulting remote path(s) into the
+// focused window (a terminal running Claude Code over SSH, typically):
+//
+//   • An image (screenshot / paint app / "copy image") — rendered to PNG and
+//     scp'd as `<remote_dir>/imgpaste-<unix-ts>.png`.
+//   • Files/folders copied in Explorer with Ctrl+C (CF_HDROP) — scp'd
+//     (folders recursively) into a per-paste folder
+//     `<remote_dir>/paste-<unix-ts>/`, with the original names preserved.
+//
+// The path travels through your existing SSH session as synthesized Ctrl+V
+// keystrokes; the bytes travel via a separate transient scp session — they
+// converge at Claude Code when it opens the path. The original clipboard
+// contents (image or file list) are restored after the paste.
 //
 // Threading: the hotkey handler does a brief clipboard read on the UI
 // thread (we already own the message loop), then hands SCP + paste to a
@@ -29,6 +35,7 @@ use windows_sys::Win32::Graphics::GdiPlus::{
 use windows_sys::Win32::System::DataExchange::*;
 use windows_sys::Win32::System::Memory::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
+use windows_sys::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
 use crate::common::wstr;
 use crate::config_store;
@@ -37,11 +44,12 @@ use crate::paths;
 pub const HOTKEY_ID: i32 = 0x9001;
 
 // CF_* clipboard format codes. windows-sys puts these under Win32_System_Ole,
-// which would drag the whole OLE feature set into the build for three u32s.
+// which would drag the whole OLE feature set into the build for four u32s.
 // Hardcoded here against the stable Win32 numeric assignments.
 const CF_BITMAP:      u32 = 2;
 const CF_DIB:         u32 = 8;
 const CF_UNICODETEXT: u32 = 13;
+const CF_HDROP:       u32 = 15;
 
 // Suppresses the cmd window flash when shelling out to scp.exe.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -97,9 +105,21 @@ pub fn handle_hotkey() {
     });
 }
 
+/// What `prepare_upload` pulled off the clipboard, ready for the worker to
+/// ship. Either a single rendered PNG (an image was on the clipboard) or a
+/// set of file/folder paths the user copied in Explorer (CF_HDROP).
+enum PreparedPayload {
+    /// An image was on the clipboard; we rendered it to this temp PNG.
+    /// `saved_dib` is the original CF_DIB bytes, restored after the paste.
+    Image { local_png: PathBuf, saved_dib: Option<Vec<u8>> },
+    /// One or more files/folders were copied in Explorer. `saved_hdrop` is
+    /// the original CF_HDROP bytes, restored after the paste so the user's
+    /// copy selection survives.
+    Paths { sources: Vec<PathBuf>, saved_hdrop: Option<Vec<u8>> },
+}
+
 struct PreparedUpload {
-    local_png:  PathBuf,
-    saved_dib:  Option<Vec<u8>>,
+    payload:    PreparedPayload,
     host:       String,
     remote_dir: String,
 }
@@ -118,14 +138,36 @@ unsafe fn prepare_upload() -> Result<PreparedUpload, String> {
         return Err("OpenClipboard failed".into());
     }
 
+    // Priority 1: files/folders copied in Explorer surface as CF_HDROP.
+    // Prefer this over CF_BITMAP — if someone copied an image *file*, we'd
+    // rather ship the original bytes than a re-encoded rasterized preview.
+    if IsClipboardFormatAvailable(CF_HDROP) != 0 {
+        // Snapshot the raw CF_HDROP block so we can put the user's copy
+        // selection back after we hijack the clipboard for the path paste.
+        // DROPFILES is offset-based (no embedded pointers), so a flat byte
+        // copy round-trips into a valid handle.
+        let saved_hdrop = snapshot_clipboard_format(CF_HDROP);
+        let sources = read_hdrop_paths();
+        CloseClipboard();
+        if sources.is_empty() {
+            return Err("clipboard advertised CF_HDROP but no paths could be read".into());
+        }
+        return Ok(PreparedUpload {
+            payload: PreparedPayload::Paths { sources, saved_hdrop },
+            host,
+            remote_dir,
+        });
+    }
+
+    // Priority 2: a raw image (screenshot, paint app, browser "copy image").
     // Snapshot CF_DIB up-front so we can restore the user's clipboard image
     // after the paste. Best-effort: if the clipboard doesn't carry CF_DIB
     // we'll just lose the restore (rare — paint apps put CF_DIB universally).
-    let saved_dib = snapshot_cf_dib();
+    let saved_dib = snapshot_clipboard_format(CF_DIB);
 
     if IsClipboardFormatAvailable(CF_BITMAP) == 0 {
         CloseClipboard();
-        return Err("no image on clipboard".into());
+        return Err("no image or files on clipboard".into());
     }
     let hbm = GetClipboardData(CF_BITMAP) as HBITMAP;
     if hbm.is_null() {
@@ -143,12 +185,47 @@ unsafe fn prepare_upload() -> Result<PreparedUpload, String> {
     CloseClipboard();
     save_result?;
 
-    Ok(PreparedUpload { local_png, saved_dib, host, remote_dir })
+    Ok(PreparedUpload {
+        payload: PreparedPayload::Image { local_png, saved_dib },
+        host,
+        remote_dir,
+    })
 }
 
-unsafe fn snapshot_cf_dib() -> Option<Vec<u8>> {
-    if IsClipboardFormatAvailable(CF_DIB) == 0 { return None; }
-    let h = GetClipboardData(CF_DIB) as HGLOBAL;
+/// Enumerate the file/folder paths inside the clipboard's CF_HDROP handle.
+/// Must be called with the clipboard already open. `DragQueryFileW` reads the
+/// DROPFILES block directly, so no GlobalLock dance is needed here.
+unsafe fn read_hdrop_paths() -> Vec<PathBuf> {
+    let hdrop = GetClipboardData(CF_HDROP) as HDROP;
+    if hdrop.is_null() {
+        return Vec::new();
+    }
+    // iFile = 0xFFFFFFFF asks for the file count instead of a path.
+    let count = DragQueryFileW(hdrop, 0xFFFF_FFFF, null_mut(), 0);
+    let mut out = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        // First call (null buffer) returns the length in chars, sans NUL.
+        let len = DragQueryFileW(hdrop, i, null_mut(), 0);
+        if len == 0 {
+            continue;
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        let got = DragQueryFileW(hdrop, i, buf.as_mut_ptr(), len + 1);
+        if got == 0 {
+            continue;
+        }
+        out.push(PathBuf::from(String::from_utf16_lossy(&buf[..got as usize])));
+    }
+    out
+}
+
+/// Snapshot the raw bytes of a clipboard format into an owned Vec, so we can
+/// re-publish it after temporarily hijacking the clipboard for the path
+/// paste. Must be called with the clipboard already open. Works for any
+/// HGLOBAL-backed format whose payload is self-contained (CF_DIB, CF_HDROP).
+unsafe fn snapshot_clipboard_format(fmt: u32) -> Option<Vec<u8>> {
+    if IsClipboardFormatAvailable(fmt) == 0 { return None; }
+    let h = GetClipboardData(fmt) as HGLOBAL;
     if h.is_null() { return None; }
     let size = GlobalSize(h);
     if size == 0 { return None; }
@@ -180,32 +257,43 @@ unsafe fn save_hbitmap_as_png(hbm: HBITMAP, dest: &Path) -> Result<(), String> {
 }
 
 fn run_upload_and_paste(p: PreparedUpload) -> Result<(), String> {
+    let PreparedUpload { payload, host, remote_dir } = p;
+    match payload {
+        PreparedPayload::Image { local_png, saved_dib } =>
+            upload_image_and_paste(&host, &remote_dir, local_png, saved_dib),
+        PreparedPayload::Paths { sources, saved_hdrop } =>
+            upload_paths_and_paste(&host, &remote_dir, sources, saved_hdrop),
+    }
+}
+
+fn upload_image_and_paste(
+    host: &str,
+    remote_dir: &str,
+    local_png: PathBuf,
+    saved_dib: Option<Vec<u8>>,
+) -> Result<(), String> {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let remote_path = format!(
-        "{}/imgpaste-{}.png",
-        p.remote_dir.trim_end_matches('/'),
-        ts,
-    );
-    let target = format!("{}:{}", p.host, remote_path);
+    let remote_path = format!("{}/imgpaste-{}.png", remote_dir.trim_end_matches('/'), ts);
+    let target = format!("{host}:{remote_path}");
 
     let status = Command::new("scp")
         .arg("-q")
-        .arg(&p.local_png)
+        .arg(&local_png)
         .arg(&target)
         .creation_flags(CREATE_NO_WINDOW)
         .status()
         .map_err(|e| format!("spawning scp.exe: {e}"))?;
 
-    let _ = std::fs::remove_file(&p.local_png);
+    let _ = std::fs::remove_file(&local_png);
 
     if !status.success() {
         // Don't paste a path that doesn't exist on the remote. Put the
         // user's screenshot back so they can retry without re-shooting.
-        if let Some(dib) = p.saved_dib {
-            let _ = unsafe { restore_cf_dib(&dib) };
+        if let Some(dib) = saved_dib {
+            let _ = unsafe { restore_clipboard_format(CF_DIB, &dib) };
         }
         return Err(format!("scp exit code {:?}", status.code()));
     }
@@ -214,9 +302,91 @@ fn run_upload_and_paste(p: PreparedUpload) -> Result<(), String> {
     std::thread::sleep(Duration::from_millis(150));
     unsafe { send_ctrl_v(); }
     std::thread::sleep(Duration::from_millis(100));
-    if let Some(dib) = p.saved_dib {
-        let _ = unsafe { restore_cf_dib(&dib) };
+    if let Some(dib) = saved_dib {
+        let _ = unsafe { restore_clipboard_format(CF_DIB, &dib) };
     }
+    Ok(())
+}
+
+/// Ship one or more copied files/folders to the remote and paste their
+/// remote path(s). Everything lands in a per-paste timestamped subfolder
+/// (`<remote_dir>/paste-<unix-ts>/`) so original names are preserved, there
+/// are no collisions between pastes, and a multi-select stays grouped.
+fn upload_paths_and_paste(
+    host: &str,
+    remote_dir: &str,
+    sources: Vec<PathBuf>,
+    saved_hdrop: Option<Vec<u8>>,
+) -> Result<(), String> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let subdir = format!("{}/paste-{}", remote_dir.trim_end_matches('/'), ts);
+
+    // Restore the clipboard file list on any early exit, so a failed transfer
+    // doesn't cost the user their Ctrl+C selection.
+    let restore = |saved: &Option<Vec<u8>>| {
+        if let Some(b) = saved {
+            let _ = unsafe { restore_clipboard_format(CF_HDROP, b) };
+        }
+    };
+
+    // 1) Create the destination subfolder. scp won't make intermediate dirs,
+    //    and pre-creating it makes `scp -r src host:subdir/` deterministically
+    //    place each item *inside* subdir rather than renaming it. Single-quote
+    //    the remote path so a space in remote_dir survives the remote shell.
+    let mkdir = Command::new("ssh")
+        .arg(host)
+        .arg(format!("mkdir -p '{subdir}'"))
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("spawning ssh.exe: {e}"))?;
+    if !mkdir.success() {
+        restore(&saved_hdrop);
+        return Err(format!("ssh mkdir exit code {:?}", mkdir.code()));
+    }
+
+    // 2) Copy every source into the subfolder in a single scp connection.
+    //    `-r` recurses folders and is harmless for plain files, so one command
+    //    form handles a mixed selection.
+    let mut cmd = Command::new("scp");
+    cmd.arg("-q").arg("-r");
+    for src in &sources {
+        cmd.arg(src);
+    }
+    cmd.arg(format!("{host}:'{subdir}/'"));
+    let scp = cmd
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("spawning scp.exe: {e}"))?;
+    if !scp.success() {
+        restore(&saved_hdrop);
+        return Err(format!("scp exit code {:?}", scp.code()));
+    }
+
+    // 3) Build the remote path(s) to paste, preserving each item's basename.
+    //    Quote any path containing a space so it survives being dropped into a
+    //    shell or tool that splits on whitespace.
+    let joined = sources
+        .iter()
+        .map(|src| {
+            let name = src
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "item".to_string());
+            let rp = format!("{subdir}/{name}");
+            if rp.contains(' ') { format!("\"{rp}\"") } else { rp }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // 4) Paste the remote path(s), then restore the original file selection.
+    unsafe { set_clipboard_text(&joined)?; }
+    std::thread::sleep(Duration::from_millis(150));
+    unsafe { send_ctrl_v(); }
+    std::thread::sleep(Duration::from_millis(100));
+    restore(&saved_hdrop);
     Ok(())
 }
 
@@ -248,7 +418,9 @@ unsafe fn set_clipboard_text(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-unsafe fn restore_cf_dib(bytes: &[u8]) -> Result<(), String> {
+/// Re-publish raw bytes previously captured by `snapshot_clipboard_format`
+/// under the same format code. Opens/closes the clipboard itself.
+unsafe fn restore_clipboard_format(fmt: u32, bytes: &[u8]) -> Result<(), String> {
     if OpenClipboard(null_mut()) == 0 {
         return Err("OpenClipboard failed (restore)".into());
     }
@@ -267,10 +439,10 @@ unsafe fn restore_cf_dib(bytes: &[u8]) -> Result<(), String> {
     GlobalUnlock(h);
 
     EmptyClipboard();
-    if SetClipboardData(CF_DIB, h as HANDLE).is_null() {
+    if SetClipboardData(fmt, h as HANDLE).is_null() {
         CloseClipboard();
         GlobalFree(h);
-        return Err("SetClipboardData(CF_DIB) failed (restore)".into());
+        return Err(format!("SetClipboardData(fmt={fmt}) failed (restore)"));
     }
     CloseClipboard();
     Ok(())
