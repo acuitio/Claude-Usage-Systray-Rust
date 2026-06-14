@@ -416,7 +416,7 @@ unsafe fn build_xfer_icon(dir: XferDir, phase: XferPhase, frame: u32) -> HICON {
     // Background color by phase (COLORREF = 0x00BBGGRR). Active pulses between
     // two blues on alternating frames.
     let bg = match phase {
-        XferPhase::Active => if frame % 2 == 0 { 0x00E6_5F2D } else { 0x0096_3C1E },
+        XferPhase::Active => if frame.is_multiple_of(2) { 0x00E6_5F2D } else { 0x0096_3C1E },
         XferPhase::Done { ok: true }  => 0x0046_AA28, // green
         XferPhase::Done { ok: false } => 0x0032_32C8, // red
     };
