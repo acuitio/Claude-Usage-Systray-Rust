@@ -21,6 +21,7 @@ const ID_MENU_REFRESH:   u16 = 9003;
 const ID_MENU_SETTINGS:  u16 = 9004;
 const ID_MENU_CHART:     u16 = 9006;
 const ID_MENU_IMGPASTE:   u16 = 9007;
+const ID_MENU_IMGPULL:    u16 = 9008;
 const ID_MENU_QUIT:      u16 = 9005;
 
 // The hidden host window that receives our tray callback. Set once at
@@ -82,6 +83,8 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
 
         AppendMenuW(menu, MF_STRING, ID_MENU_IMGPASTE as usize,
             w!("Send Clipboard Image/Files\tAlt+Shift+V"));
+        AppendMenuW(menu, MF_STRING, ID_MENU_IMGPULL as usize,
+            w!("Get Remote → Clipboard\tAlt+Shift+D"));
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
         AppendMenuW(menu, MF_STRING, ID_MENU_QUIT as usize, w!("Quit"));
@@ -100,6 +103,7 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
             ID_MENU_CHART     => chart::open(host),
             ID_MENU_SETTINGS  => settings::open(host),
             ID_MENU_IMGPASTE   => crate::imgpaste::handle_hotkey(),
+            ID_MENU_IMGPULL    => crate::imgpull::handle_hotkey(),
             ID_MENU_QUIT      => { remove(); PostQuitMessage(0); }
             _ => {}
         }
@@ -147,6 +151,34 @@ pub unsafe fn remove() {
     nid.hWnd   = TRAY_HWND.load(Ordering::Relaxed);
     nid.uID    = 1;
     Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+/// Show a tray balloon (NIF_INFO). Best-effort feedback — currently used by
+/// imgpull to signal that a fetched file is staged on the clipboard and ready
+/// to paste. No-op if the tray icon isn't installed yet.
+pub unsafe fn notify(title: &str, body: &str) {
+    let host = TRAY_HWND.load(Ordering::Relaxed);
+    if host.is_null() { return; }
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd   = host;
+    nid.uID    = 1;
+    nid.uFlags = NIF_INFO;
+    fill_wide(&mut nid.szInfo, body);
+    fill_wide(&mut nid.szInfoTitle, title);
+    nid.dwInfoFlags = NIIF_INFO;
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+/// Copy `s` as UTF-16 into a fixed-size buffer, truncating to fit and keeping
+/// a trailing NUL.
+fn fill_wide(buf: &mut [u16], s: &str) {
+    let w = wstr(s); // chars + trailing NUL
+    let n = w.len().min(buf.len());
+    buf[..n].copy_from_slice(&w[..n]);
+    if w.len() > buf.len() && !buf.is_empty() {
+        buf[buf.len() - 1] = 0; // force termination when truncated
+    }
 }
 
 /// Return the cached HICON if (rounded-pct, color-tier) match the last call;

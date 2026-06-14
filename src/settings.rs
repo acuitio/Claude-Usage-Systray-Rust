@@ -154,7 +154,7 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
     // would wipe them. Merge: take the form fields from `new_cfg`, keep the
     // non-form fields from `old_cfg`.
     //
-    // The three imgpaste hotkey/enabled fields aren't editable in the UI
+    // The imgpaste/imgpull hotkey/enabled fields aren't editable in the UI
     // yet either — preserve them so Apply doesn't silently reset them to
     // defaults via serde when the JS payload omits them.
     let merged = AppConfig {
@@ -168,6 +168,9 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
         imgpaste_enabled:     old_cfg.imgpaste_enabled,
         imgpaste_hotkey_mods: old_cfg.imgpaste_hotkey_mods,
         imgpaste_hotkey_vk:   old_cfg.imgpaste_hotkey_vk,
+        imgpull_enabled:      old_cfg.imgpull_enabled,
+        imgpull_hotkey_mods:  old_cfg.imgpull_hotkey_mods,
+        imgpull_hotkey_vk:    old_cfg.imgpull_hotkey_vk,
         ..new_cfg
     };
 

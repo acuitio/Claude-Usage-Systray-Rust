@@ -26,6 +26,7 @@ mod cooldown;
 mod credentials;
 mod dashboard;
 mod imgpaste;
+mod imgpull;
 mod models;
 mod oauth_refresh;
 mod overlay;
@@ -119,9 +120,11 @@ fn main() {
 
         tray::install(host);
 
-        // Register the imgpaste global hotkey against this same host window.
-        // Failures are non-fatal — they get logged to imgpaste.log.
+        // Register the imgpaste + imgpull global hotkeys against this same host
+        // window. Failures are non-fatal — they get logged to imgpaste.log /
+        // imgpull.log.
         imgpaste::register_hotkey(host);
+        imgpull::register_hotkey(host);
 
         // Schedule the registry self-patch ~1.5 s after the icon registers,
         // matching the C# port. Windows writes the partial NotifyIconSettings
@@ -163,8 +166,11 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         }
         match msg {
             WM_HOTKEY => {
-                if wp as i32 == imgpaste::HOTKEY_ID {
+                let id = wp as i32;
+                if id == imgpaste::HOTKEY_ID {
                     imgpaste::handle_hotkey();
+                } else if id == imgpull::HOTKEY_ID {
+                    imgpull::handle_hotkey();
                 }
                 0
             }
@@ -182,6 +188,7 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             }
             WM_DESTROY => {
                 imgpaste::unregister_hotkey(hwnd);
+                imgpull::unregister_hotkey(hwnd);
                 PostQuitMessage(0);
                 0
             }

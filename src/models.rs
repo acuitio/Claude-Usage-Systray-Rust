@@ -44,6 +44,13 @@ pub struct AppConfig {
     #[serde(default = "default_imgpaste_dir")] pub imgpaste_remote_dir: String,
     #[serde(default = "default_imgpaste_mods")] pub imgpaste_hotkey_mods: u32,
     #[serde(default = "default_imgpaste_vk")]  pub imgpaste_hotkey_vk: u32,
+    // imgpull — Alt+Shift+D scps a remote file/dir (path copied from the
+    // terminal) to a local temp dir and loads it onto the clipboard as
+    // CF_HDROP, so Ctrl+V in Explorer/Desktop pastes it. Reuses imgpaste_host
+    // as the source. See src/imgpull.rs.
+    #[serde(default = "default_true")]          pub imgpull_enabled: bool,
+    #[serde(default = "default_imgpull_mods")]  pub imgpull_hotkey_mods: u32,
+    #[serde(default = "default_imgpull_vk")]    pub imgpull_hotkey_vk: u32,
 }
 
 impl Default for AppConfig {
@@ -80,6 +87,9 @@ impl Default for AppConfig {
             imgpaste_remote_dir: "/tmp".into(),
             imgpaste_hotkey_mods: 0x0005,  // MOD_ALT | MOD_SHIFT
             imgpaste_hotkey_vk:   0x56,    // 'V'
+            imgpull_enabled: true,
+            imgpull_hotkey_mods: 0x0005,   // MOD_ALT | MOD_SHIFT
+            imgpull_hotkey_vk:   0x44,     // 'D'
         }
     }
 }
@@ -101,6 +111,8 @@ fn default_imgpaste_host()          -> String { "gx10".into() }
 fn default_imgpaste_dir()           -> String { "/tmp".into() }
 fn default_imgpaste_mods()          -> u32    { 0x0005 }  // MOD_ALT | MOD_SHIFT
 fn default_imgpaste_vk()            -> u32    { 0x56 }    // 'V'
+fn default_imgpull_mods()           -> u32    { 0x0005 }  // MOD_ALT | MOD_SHIFT
+fn default_imgpull_vk()             -> u32    { 0x44 }    // 'D'
 
 // ─── Anthropic usage API response shape ──────────────────────────────
 
