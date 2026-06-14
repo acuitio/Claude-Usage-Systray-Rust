@@ -349,13 +349,17 @@ fn upload_paths_and_paste(
 
     // 2) Copy every source into the subfolder in a single scp connection.
     //    `-r` recurses folders and is harmless for plain files, so one command
-    //    form handles a mixed selection.
+    //    form handles a mixed selection. Do NOT quote the remote dest: modern
+    //    OpenSSH scp runs over SFTP and uses the path after `host:` literally
+    //    (no remote shell), so quotes would become part of the path and fail
+    //    realpath. SFTP also doesn't word-split, so spaces are safe unquoted.
+    //    (The mkdir above DOES go through a shell, hence its quotes.)
     let mut cmd = Command::new("scp");
     cmd.arg("-q").arg("-r");
     for src in &sources {
         cmd.arg(src);
     }
-    cmd.arg(format!("{host}:'{subdir}/'"));
+    cmd.arg(format!("{host}:{subdir}/"));
     let scp = cmd
         .creation_flags(CREATE_NO_WINDOW)
         .status()
