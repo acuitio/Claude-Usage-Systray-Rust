@@ -19,6 +19,23 @@ single `ClaudeUsageSystray.exe`. Pick the one matching your CPU
 architecture. To check your machine's architecture:
 `(Get-WmiObject Win32_Processor).Architecture` (9 = x64, 12 = ARM64).
 
+### Installing the downloaded binary
+
+The `dist/` folder is the conventional install location (it is left
+untracked — only the source is versioned). After downloading, copy the
+`.exe` matching your architecture to a stable path and launch it,
+stopping any running instance first:
+
+```powershell
+# Stop the previous instance (if any), then install + launch
+Get-Process ClaudeUsageSystray -ErrorAction SilentlyContinue | Stop-Process -Force
+Copy-Item dist\ClaudeUsageSystray-x86_64-pc-windows-msvc-<sha>\ClaudeUsageSystray.exe `
+  dist\ClaudeUsageSystray.exe -Force
+Start-Process dist\ClaudeUsageSystray.exe
+```
+
+`dist\ClaudeUsageSystray.exe` is then the installed/running copy.
+
 The rest of this document is for building locally.
 
 ## Prerequisites
