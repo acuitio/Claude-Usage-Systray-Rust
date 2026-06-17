@@ -36,9 +36,40 @@ fn load_locked() -> AppState {
     migrate_if_needed();
     let path = paths::state();
     if !path.exists() { return AppState::default(); }
-    match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-        Err(_)    => AppState::default(),
+    let bytes = match std::fs::read(&path) {
+        Ok(b)  => b,
+        Err(_) => return AppState::default(),
+    };
+    // Tolerate a UTF-8 BOM. serde_json rejects a leading EF BB BF, and any
+    // editor or PowerShell `Set-Content -Encoding utf8` that touches this
+    // file adds one — which would otherwise silently reset every setting.
+    let slice = match bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        Some(stripped) => stripped,
+        None           => &bytes[..],
+    };
+    match serde_json::from_slice(slice) {
+        Ok(state) => state,
+        Err(e) => {
+            // Never silently discard the user's settings on a parse error:
+            // the immediate fallback-to-default would be saved straight back
+            // over the file on the next write, destroying any chance of
+            // recovery. Preserve the offending file and leave a breadcrumb.
+            log_parse_error(&path, &e);
+            AppState::default()
+        }
+    }
+}
+
+/// Move an unparseable state file aside (so the next save can't clobber it)
+/// and append a one-line note. Best-effort — failures here are non-fatal.
+fn log_parse_error(path: &std::path::Path, err: &serde_json::Error) {
+    use std::io::Write;
+    let _ = std::fs::rename(path, path.with_extension("json.bad"));
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open(paths::app_dir().join("state_store.log"))
+    {
+        let _ = writeln!(f, "parse failed, saved as app_state.json.bad: {err}");
     }
 }
 

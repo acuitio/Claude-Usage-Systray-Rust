@@ -86,7 +86,7 @@ impl Default for AppConfig {
             dashboard_w: None,
             dashboard_h: None,
             imgpaste_enabled: true,
-            imgpaste_host: "gx10".into(),
+            imgpaste_host: "GX10".into(),
             imgpaste_remote_dir: "/tmp".into(),
             imgpaste_hotkey_mods: 0x0005,  // MOD_ALT | MOD_SHIFT
             imgpaste_hotkey_vk:   0x56,    // 'V'
@@ -111,7 +111,7 @@ fn default_suf()                   -> String { "#64c864".into() }
 fn default_part()                  -> String { "#e6c832".into() }
 fn default_depl()                  -> String { "#e65050".into() }
 fn default_text()                  -> String { "#ffffff".into() }
-fn default_imgpaste_host()          -> String { "gx10".into() }
+fn default_imgpaste_host()          -> String { "GX10".into() }
 fn default_imgpaste_dir()           -> String { "/tmp".into() }
 fn default_imgpaste_mods()          -> u32    { 0x0005 }  // MOD_ALT | MOD_SHIFT
 fn default_imgpaste_vk()            -> u32    { 0x56 }    // 'V'
