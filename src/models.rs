@@ -130,15 +130,29 @@ pub struct UsageResponse {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageMetric {
-    #[serde(default)] pub utilization: f64,
+    // The API can send `null` for utilization (seen when a usage tier is
+    // disabled). serde's `default` only covers a *missing* key, not an explicit
+    // null — so without the custom deserializer, one null fails the ENTIRE
+    // response parse and freezes every number. Map null → 0.0 instead.
+    #[serde(default, deserialize_with = "null_as_zero_f64")] pub utilization: f64,
     #[serde(default)] pub resets_at:   Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExtraUsage {
     #[serde(default)] pub is_enabled:    bool,
-    #[serde(default)] pub used_credits:  f64,
-    #[serde(default)] pub monthly_limit: f64,
+    // Null when extra usage is disabled (is_enabled=false). Must be Option,
+    // not f64, or a disabled account fails the whole usage parse. Bit us
+    // 2026-06-21: credits flipped to null and froze session+weekly too.
+    #[serde(default)] pub used_credits:  Option<f64>,
+    #[serde(default)] pub monthly_limit: Option<f64>,
+}
+
+/// Deserialize an f64 the API may send as `null`, mapping null (and, with
+/// `default`, a missing key) to 0.0. Keeps the field a plain f64 so call sites
+/// don't change, while making the parse resilient to a single null.
+fn null_as_zero_f64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(d)?.unwrap_or(0.0))
 }
 
 // ─── Credentials file (~/.claude/.credentials.json) ──────────────────
