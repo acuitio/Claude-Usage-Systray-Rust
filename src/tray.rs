@@ -202,7 +202,7 @@ unsafe fn maybe_notify_health_change(badge: u8) {
     let prev = PREV_STATUS.with(|c| c.get());
     if badge == BADGE_AUTH && prev != BADGE_AUTH {
         notify(
-            "Claude sign-in expired",
+            "Claude sign-in needed",
             "Usage updates are paused. Run `claude login`, then click Refresh Now.",
         );
     } else if prev == BADGE_AUTH && badge != BADGE_AUTH {
@@ -225,7 +225,7 @@ unsafe fn write_tooltip(buf: &mut [u16], usage: &crate::common::UsageData) {
         crate::health::Status::Stale =>
             format!("\n⚠ Not updating — last OK {} ago", crate::health::cache_age_label()),
         crate::health::Status::Auth =>
-            "\n⚠ Sign-in expired — run: claude login".to_string(),
+            "\n⚠ Sign-in needed — run: claude login".to_string(),
     };
     let tip_str = format!(
         "Usage: {:.0}% | {:.0}% | {:.0}%\n{}{}{}",

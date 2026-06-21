@@ -49,7 +49,10 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
     }
 
     let Some(token) = credentials::read_access_token() else {
-        return FetchOutcome::Failed { detail: "No credentials".into() };
+        // A *missing* token (Claude Code signed out / cleared its creds) needs
+        // the same action as a rejected one — re-login — so classify it as
+        // AuthFailed, not a generic failure, to get the actionable prompt.
+        return FetchOutcome::AuthFailed { detail: "No credentials (signed out)".into() };
     };
 
     let mut last_error = String::new();
