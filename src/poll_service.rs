@@ -52,18 +52,29 @@ pub fn start(host: HWND) {
         // Fire immediately for first paint, then loop on interval.
         let mut force = false;
         loop {
+            use usage_fetcher::FetchOutcome::*;
+            // Record the outcome into health so the UI can show whether the
+            // numbers are live, stale, or blocked on re-auth.
             match usage_fetcher::fetch(&http, force) {
-                usage_fetcher::FetchOutcome::Refreshed | usage_fetcher::FetchOutcome::CacheHit => {
-                    if let Some(h) = host_hwnd() {
-                        unsafe { PostMessageW(h, WM_USAGE_UPDATED, 0, 0); }
-                    }
-                }
-                usage_fetcher::FetchOutcome::Cooldown { remaining_seconds } => {
+                Refreshed | CacheHit => crate::health::note_ok(),
+                Cooldown { remaining_seconds } => {
+                    crate::health::note_cooldown();
                     eprintln!("poll: cooldown {remaining_seconds}s remaining");
                 }
-                usage_fetcher::FetchOutcome::Failed { detail } => {
+                AuthFailed { detail } => {
+                    crate::health::note_auth();
+                    eprintln!("poll: auth failed — {detail}");
+                }
+                Failed { detail } => {
+                    crate::health::note_error();
                     eprintln!("poll: fetch failed — {detail}");
                 }
+            }
+
+            // Always nudge the UI — even on failure — so the tray/overlay can
+            // re-render the staleness indicator, not just on a successful fetch.
+            if let Some(h) = host_hwnd() {
+                unsafe { PostMessageW(h, WM_USAGE_UPDATED, 0, 0); }
             }
 
             // Re-read interval each cycle so changes in Settings take effect
@@ -95,7 +106,13 @@ pub fn trigger_refresh() {
     let host_addr: Option<isize> = host_hwnd().map(|h| h as isize);
     thread::spawn(move || {
         let http = build_http_agent();
-        let _ = usage_fetcher::fetch(&http, true);
+        use usage_fetcher::FetchOutcome::*;
+        match usage_fetcher::fetch(&http, true) {
+            Refreshed | CacheHit => crate::health::note_ok(),
+            Cooldown { .. }      => crate::health::note_cooldown(),
+            AuthFailed { .. }    => crate::health::note_auth(),
+            Failed { .. }        => crate::health::note_error(),
+        }
         if let Some(addr) = host_addr {
             unsafe { PostMessageW(addr as HWND, WM_USAGE_UPDATED, 0, 0); }
         }

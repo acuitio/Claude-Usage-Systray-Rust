@@ -20,7 +20,11 @@ pub enum FetchOutcome {
     Refreshed,
     /// Skipped because of an active cooldown.
     Cooldown { remaining_seconds: i32 },
-    /// HTTP attempted and failed (auth/network/parse). Last error in `detail`.
+    /// Token rejected (401/403). Actionable: the user must re-authenticate
+    /// (e.g. `claude login`). Kept distinct from Failed so the UI can show a
+    /// specific "sign-in expired" prompt instead of a generic stale marker.
+    AuthFailed { detail: String },
+    /// HTTP attempted and failed (network/parse/5xx). Last error in `detail`.
     Failed { detail: String },
 }
 
@@ -92,7 +96,7 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
                     let _ = cooldown::engage(retry_after.as_deref(), cooldown::SHORT_SEC);
                 }
                 if code == 401 || code == 403 {
-                    return FetchOutcome::Failed { detail: last_error };
+                    return FetchOutcome::AuthFailed { detail: last_error };
                 }
             }
             Err(e) => {

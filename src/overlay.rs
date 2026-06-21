@@ -240,6 +240,29 @@ unsafe fn render() {
     let text_color = hex_to_colorref(&cfg.color_text).unwrap_or(0x00ff_ffff);
     let mut tokens = build_tokens(&cfg.overlay_format, &cfg, &usage, text_color);
 
+    // When the data isn't live, grey the whole readout and prepend a marker so
+    // a stale/auth-blocked number can't pass for current. The tray tooltip and
+    // balloon carry the actionable detail ("run claude login").
+    let status = crate::health::status();
+    if status != crate::health::Status::Live {
+        const STALE_GREY: u32 = 0x0078_7878;
+        let marker_color = if status == crate::health::Status::Auth {
+            0x0030_30E6 // red
+        } else {
+            0x000C_A5FF // orange
+        };
+        for t in &mut tokens {
+            t.color = STALE_GREY;
+        }
+        tokens.insert(0, OverlayToken {
+            kind:  TokenKind::Text,
+            text:  "! ".to_string(),
+            style: FontStyle::Main,
+            color: marker_color,
+            width: 0, height: 0,
+        });
+    }
+
     let div_w   = (scale as i32).max(1);
     let div_gap = ((4.0 * scale) as i32).max(3);
 

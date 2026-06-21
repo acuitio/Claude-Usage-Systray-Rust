@@ -30,15 +30,36 @@ const ID_MENU_QUIT:      u16 = 9005;
 static TRAY_HWND: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(null_mut());
 
 // Icon cache. Rebuilding the 64×64 icon on every poll wastes GDI cycles when
-// the rounded percentage and color tier haven't changed. Keyed on
-// (pct_int, color); only NIM_MODIFY when those move.
+// the rounded percentage, color tier, and health badge haven't changed. Keyed
+// on (pct_int, color, badge); only NIM_MODIFY when those move.
 struct IconCache {
     pct_int: i32,
     color:   u32,
+    badge:   u8,
     icon:    HICON,
 }
 thread_local! {
     static ICON_CACHE: RefCell<Option<IconCache>> = const { RefCell::new(None) };
+}
+
+// Health badge codes drawn in the icon's top-right corner. 0 = none.
+const BADGE_NONE: u8 = 0;
+const BADGE_STALE: u8 = 1; // orange — data old (cooldown/network/server)
+const BADGE_AUTH:  u8 = 2; // red — token rejected, re-auth needed
+
+/// Map the current health status to an icon badge code.
+fn badge_code() -> u8 {
+    match crate::health::status() {
+        crate::health::Status::Live => BADGE_NONE,
+        crate::health::Status::Stale => BADGE_STALE,
+        crate::health::Status::Auth  => BADGE_AUTH,
+    }
+}
+
+// Remembers the last health status seen by refresh() (UI thread only) so we can
+// fire a one-time balloon on transitions into/out of the Auth state.
+thread_local! {
+    static PREV_STATUS: std::cell::Cell<u8> = const { std::cell::Cell::new(BADGE_NONE) };
 }
 
 // ─── Transfer indicator state ─────────────────────────────────────────
@@ -81,7 +102,7 @@ pub unsafe fn install(host: HWND) {
     TRAY_HWND.store(host, Ordering::Relaxed);
 
     let usage = current_snapshot();
-    let icon  = get_or_build_icon(usage.session_pct);
+    let icon  = get_or_build_icon(usage.session_pct, badge_code());
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
     nid.hWnd   = host;
@@ -160,8 +181,10 @@ pub unsafe fn refresh() {
     // A transfer indicator is showing — don't stomp it with the usage icon.
     // The indicator restores the usage icon itself when it reverts to idle.
     if XFER.with(|c| c.borrow().is_some()) { return; }
+    let badge = badge_code();
+    maybe_notify_health_change(badge);
     let usage = current_snapshot();
-    let icon  = get_or_build_icon(usage.session_pct);
+    let icon  = get_or_build_icon(usage.session_pct, badge);
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
     nid.hWnd   = host;
@@ -172,6 +195,22 @@ pub unsafe fn refresh() {
     Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
+/// Fire a one-time balloon when health crosses into Auth (sign-in needed) or
+/// recovers from it. Stale↔Live transitions stay silent — the icon badge and
+/// tooltip carry those without nagging.
+unsafe fn maybe_notify_health_change(badge: u8) {
+    let prev = PREV_STATUS.with(|c| c.get());
+    if badge == BADGE_AUTH && prev != BADGE_AUTH {
+        notify(
+            "Claude sign-in expired",
+            "Usage updates are paused. Run `claude login`, then click Refresh Now.",
+        );
+    } else if prev == BADGE_AUTH && badge != BADGE_AUTH {
+        notify("Usage updates resumed", "Sign-in restored — numbers are live again.");
+    }
+    PREV_STATUS.with(|c| c.set(badge));
+}
+
 unsafe fn write_tooltip(buf: &mut [u16], usage: &crate::common::UsageData) {
     let cd = crate::cooldown::remaining_seconds();
     let suffix = if cd > 0 {
@@ -179,9 +218,18 @@ unsafe fn write_tooltip(buf: &mut [u16], usage: &crate::common::UsageData) {
     } else {
         String::new()
     };
+    // A status line makes a stale/auth-blocked reading honest instead of
+    // letting an old number masquerade as current.
+    let status_line = match crate::health::status() {
+        crate::health::Status::Live => String::new(),
+        crate::health::Status::Stale =>
+            format!("\n⚠ Not updating — last OK {} ago", crate::health::cache_age_label()),
+        crate::health::Status::Auth =>
+            "\n⚠ Sign-in expired — run: claude login".to_string(),
+    };
     let tip_str = format!(
-        "Usage: {:.0}% | {:.0}% | {:.0}%\n{}{}",
-        usage.session_pct, usage.weekly_pct, usage.sonnet_pct, usage.plan, suffix,
+        "Usage: {:.0}% | {:.0}% | {:.0}%\n{}{}{}",
+        usage.session_pct, usage.weekly_pct, usage.sonnet_pct, usage.plan, suffix, status_line,
     );
     let tip = wstr(&tip_str);
     let limit = buf.len().min(127);
@@ -226,27 +274,27 @@ fn fill_wide(buf: &mut [u16], s: &str) {
     }
 }
 
-/// Return the cached HICON if (rounded-pct, color-tier) match the last call;
-/// otherwise rebuild, destroy the previous handle, and cache the new one.
-unsafe fn get_or_build_icon(pct: f64) -> HICON {
+/// Return the cached HICON if (rounded-pct, color-tier, badge) match the last
+/// call; otherwise rebuild, destroy the previous handle, and cache the new one.
+unsafe fn get_or_build_icon(pct: f64, badge: u8) -> HICON {
     let pct_int = pct.round() as i32;
     let color   = pct_color(pct);
     ICON_CACHE.with(|cell| {
         let mut slot = cell.borrow_mut();
         if let Some(c) = slot.as_ref() {
-            if c.pct_int == pct_int && c.color == color {
+            if c.pct_int == pct_int && c.color == color && c.badge == badge {
                 return c.icon;
             }
             DestroyIcon(c.icon);
         }
-        let icon = build_tray_icon(pct);
-        *slot = Some(IconCache { pct_int, color, icon });
+        let icon = build_tray_icon(pct, badge);
+        *slot = Some(IconCache { pct_int, color, badge, icon });
         icon
     })
 }
 
 // Render the bar-chart icon at 64×64, then convert to HICON.
-unsafe fn build_tray_icon(pct: f64) -> HICON {
+unsafe fn build_tray_icon(pct: f64, badge: u8) -> HICON {
     let hdc_screen = GetDC(null_mut());
     let hdc_mem    = CreateCompatibleDC(hdc_screen);
     let bmp        = CreateCompatibleBitmap(hdc_screen, 64, 64);
@@ -286,6 +334,11 @@ unsafe fn build_tray_icon(pct: f64) -> HICON {
     SelectObject(hdc_mem, old_font);
     DeleteObject(font as HGDIOBJ);
 
+    // Health badge in the top-right corner when the data isn't live.
+    if badge != BADGE_NONE {
+        draw_health_badge(hdc_mem, badge);
+    }
+
     SelectObject(hdc_mem, old_bmp);
     DeleteDC(hdc_mem);
     ReleaseDC(null_mut(), hdc_screen);
@@ -300,6 +353,40 @@ unsafe fn build_tray_icon(pct: f64) -> HICON {
     DeleteObject(bmp as HGDIOBJ);
     DeleteObject(mask as HGDIOBJ);
     icon
+}
+
+/// Draw a filled warning circle with a white "!" in the icon's top-right
+/// corner. Orange for stale, red for auth — both read as "attention" even
+/// shrunk to 16px in the tray.
+unsafe fn draw_health_badge(hdc: HDC, badge: u8) {
+    let color = if badge == BADGE_AUTH { 0x0030_30E6 } else { 0x000C_A5FF }; // red / orange
+    // Circle in the top-right corner (64×64 canvas).
+    let (l, t, r, b) = (34, 2, 62, 30);
+    let brush = CreateSolidBrush(color);
+    let pen   = CreatePen(PS_SOLID, 2, 0x00FF_FFFF); // white rim for contrast
+    let ob = SelectObject(hdc, brush as HGDIOBJ);
+    let op = SelectObject(hdc, pen as HGDIOBJ);
+    Ellipse(hdc, l, t, r, b);
+    SelectObject(hdc, ob);
+    SelectObject(hdc, op);
+    DeleteObject(brush as HGDIOBJ);
+    DeleteObject(pen as HGDIOBJ);
+
+    // White "!" centered in the circle.
+    let font = CreateFontW(
+        22, 0, 0, 0, FW_BOLD as i32,
+        0, 0, 0, DEFAULT_CHARSET as u32, OUT_DEFAULT_PRECIS as u32,
+        CLIP_DEFAULT_PRECIS as u32, CLEARTYPE_QUALITY as u32,
+        (DEFAULT_PITCH | FF_DONTCARE) as u32, w!("Arial"),
+    );
+    let old_font = SelectObject(hdc, font as HGDIOBJ);
+    SetBkMode(hdc, TRANSPARENT as i32);
+    SetTextColor(hdc, 0x00FF_FFFF);
+    let txt = wstr("!");
+    let mut rc = RECT { left: l, top: t - 1, right: r, bottom: b };
+    DrawTextW(hdc, txt.as_ptr(), -1, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, old_font);
+    DeleteObject(font as HGDIOBJ);
 }
 
 // ─── Transfer indicator: signalling + lifecycle ───────────────────────

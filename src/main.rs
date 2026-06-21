@@ -24,6 +24,7 @@ mod common;
 mod config_store;
 mod cooldown;
 mod credentials;
+mod health;
 mod dashboard;
 mod imgpaste;
 mod imgpull;
