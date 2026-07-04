@@ -270,7 +270,7 @@
     const bars = [];
     if (s.show_session) bars.push(renderBar('Session (5-hour)',    s.session_pct, s.session_reset, s.session_eta, showEta));
     if (s.show_weekly)  bars.push(renderBar('Weekly (All Models)', s.weekly_pct,  s.weekly_reset,  s.weekly_eta,  showEta));
-    if (s.show_sonnet)  bars.push(renderBar('Weekly (Sonnet)',     s.sonnet_pct,  s.weekly_reset,  s.sonnet_eta,  showEta));
+    if (s.show_fable)   bars.push(renderBar('Weekly (Fable)',      s.fable_pct,   s.fable_reset,   s.fable_eta,   showEta));
     document.getElementById('bars').innerHTML = bars.join('<div style="height:6px"></div>');
 
     document.getElementById('extra').innerHTML = renderExtra(s.extra);

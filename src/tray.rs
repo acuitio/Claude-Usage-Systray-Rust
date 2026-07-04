@@ -229,7 +229,7 @@ unsafe fn write_tooltip(buf: &mut [u16], usage: &crate::common::UsageData) {
     };
     let tip_str = format!(
         "Usage: {:.0}% | {:.0}% | {:.0}%\n{}{}{}",
-        usage.session_pct, usage.weekly_pct, usage.sonnet_pct, usage.plan, suffix, status_line,
+        usage.session_pct, usage.weekly_pct, usage.fable_pct, usage.plan, suffix, status_line,
     );
     let tip = wstr(&tip_str);
     let limit = buf.len().min(127);

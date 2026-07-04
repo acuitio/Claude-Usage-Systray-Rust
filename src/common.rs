@@ -70,8 +70,10 @@ pub struct UsageData {
     pub session_pct: f64,
     pub weekly_pct:  f64,
     pub sonnet_pct:  f64,
+    pub fable_pct:   f64,
     pub session_reset_iso: Option<String>,
     pub weekly_reset_iso:  Option<String>,
+    pub fable_reset_iso:   Option<String>,
     pub extra: Option<crate::models::ExtraUsage>,
     pub plan:  String,
 }
@@ -81,18 +83,29 @@ pub fn current_snapshot() -> UsageData {
         crate::credentials::read_full().as_ref());
 
     match crate::usage_cache::load().and_then(|c| c.data) {
-        Some(d) => UsageData {
-            session_pct: d.five_hour.as_ref().map(|m| m.utilization).unwrap_or(0.0),
-            weekly_pct:  d.seven_day.as_ref().map(|m| m.utilization).unwrap_or(0.0),
-            sonnet_pct:  d.seven_day_sonnet.as_ref().map(|m| m.utilization).unwrap_or(0.0),
-            session_reset_iso: d.five_hour.as_ref().and_then(|m| m.resets_at.clone()),
-            weekly_reset_iso:  d.seven_day.as_ref().and_then(|m| m.resets_at.clone()),
-            extra: d.extra_usage,
-            plan,
-        },
+        Some(d) => {
+            // Extract Fable into owned locals *before* the struct literal —
+            // fable_limit() borrows `d`, but `extra: d.extra_usage` moves out
+            // of `d`, so the borrow must end first.
+            let (fable_pct, fable_reset_iso) = match d.fable_limit() {
+                Some(l) => (l.percent, l.resets_at.clone()),
+                None    => (0.0, None),
+            };
+            UsageData {
+                session_pct: d.five_hour.as_ref().map(|m| m.utilization).unwrap_or(0.0),
+                weekly_pct:  d.seven_day.as_ref().map(|m| m.utilization).unwrap_or(0.0),
+                sonnet_pct:  d.seven_day_sonnet.as_ref().map(|m| m.utilization).unwrap_or(0.0),
+                fable_pct,
+                session_reset_iso: d.five_hour.as_ref().and_then(|m| m.resets_at.clone()),
+                weekly_reset_iso:  d.seven_day.as_ref().and_then(|m| m.resets_at.clone()),
+                fable_reset_iso,
+                extra: d.extra_usage,
+                plan,
+            }
+        }
         None => UsageData {
-            session_pct: 0.0, weekly_pct: 0.0, sonnet_pct: 0.0,
-            session_reset_iso: None, weekly_reset_iso: None,
+            session_pct: 0.0, weekly_pct: 0.0, sonnet_pct: 0.0, fable_pct: 0.0,
+            session_reset_iso: None, weekly_reset_iso: None, fable_reset_iso: None,
             extra: None, plan,
         },
     }

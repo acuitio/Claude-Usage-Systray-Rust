@@ -168,6 +168,7 @@ fn build_snapshot_json() -> String {
     let usage = crate::common::current_snapshot();
     let session_reset = crate::common::format_reset(usage.session_reset_iso.as_deref());
     let weekly_reset  = crate::common::format_reset(usage.weekly_reset_iso.as_deref());
+    let fable_reset   = crate::common::format_reset(usage.fable_reset_iso.as_deref());
 
     // "Updated Xs ago" — derived from the cache file's refresh timestamp.
     let last_refresh_ago = crate::usage_cache::load()
@@ -191,15 +192,16 @@ fn build_snapshot_json() -> String {
         "plan":           usage.plan,
         "session_pct":    usage.session_pct,
         "weekly_pct":     usage.weekly_pct,
-        "sonnet_pct":     usage.sonnet_pct,
+        "fable_pct":      usage.fable_pct,
         "session_reset":  session_reset,
         "weekly_reset":   weekly_reset,
+        "fable_reset":    fable_reset,
         "session_eta":    depletion_eta(1),
         "weekly_eta":     depletion_eta(2),
-        "sonnet_eta":     depletion_eta(3),
+        "fable_eta":      depletion_eta(3),
         "show_session":   cfg.show_session,
         "show_weekly":    cfg.show_weekly,
-        "show_sonnet":    cfg.show_sonnet,
+        "show_fable":     cfg.show_fable,
         "show_depletion_estimates": cfg.show_depletion_estimates,
         "show_last_refresh":        cfg.show_last_refresh,
         "last_refresh_ago": last_refresh_ago,

@@ -73,7 +73,9 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
                 let _ = usage_history::append(
                     data.five_hour.as_ref().map(|m| m.utilization).unwrap_or(0.0),
                     data.seven_day.as_ref().map(|m| m.utilization).unwrap_or(0.0),
-                    data.seven_day_sonnet.as_ref().map(|m| m.utilization).unwrap_or(0.0),
+                    // 4th column is now the scoped-weekly (Fable) percent — the
+                    // Sonnet field the API used to fill here is permanently null.
+                    data.fable_limit().map(|l| l.percent).unwrap_or(0.0),
                 );
                 return FetchOutcome::Refreshed;
             }

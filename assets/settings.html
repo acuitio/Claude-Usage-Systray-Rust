@@ -259,14 +259,14 @@
       <div style="margin-top:12px">
         <label class="field-label" for="overlay_format" style="display:block; margin-bottom:4px">Format string</label>
         <input type="text" class="wide" id="overlay_format" style="width:100%">
-        <div class="note" style="margin-left:0">Placeholders: <code>{session}</code> <code>{weekly}</code> <code>{sonnet}</code> <code>{s_reset}</code> <code>{w_reset}</code>. Use <code>|</code> for vertical divider.</div>
+        <div class="note" style="margin-left:0">Placeholders: <code>{session}</code> <code>{weekly}</code> <code>{fable}</code> <code>{s_reset}</code> <code>{w_reset}</code> <code>{f_reset}</code>. Use <code>|</code> for vertical divider.</div>
       </div>
 
       <details class="subsection" open>
         <summary>What to show</summary>
         <label class="check"><input type="checkbox" id="show_session">Session (5-hour)</label>
         <label class="check"><input type="checkbox" id="show_weekly">Weekly (All Models)</label>
-        <label class="check"><input type="checkbox" id="show_sonnet">Weekly (Sonnet)</label>
+        <label class="check"><input type="checkbox" id="show_fable">Weekly (Fable)</label>
         <label class="check"><input type="checkbox" id="show_depletion_estimates">Depletion estimates under each bar</label>
         <label class="check"><input type="checkbox" id="show_last_refresh">"Time since last refresh"</label>
       </details>
@@ -345,7 +345,7 @@
   // → JSON keys → these ids).
   const CHECKBOXES = [
     'start_on_startup', 'dashboard_on_top', 'auto_refresh_token',
-    'show_session', 'show_weekly', 'show_sonnet',
+    'show_session', 'show_weekly', 'show_fable',
     'show_depletion_estimates', 'show_last_refresh',
   ];
   const NUMBERS  = ['overlay_opacity', 'scale_pct', 'poll_interval_sec'];

@@ -14,7 +14,7 @@
     --grid:      #2d3340;
     --session:   #3fb950;
     --weekly:    #e6c832;
-    --sonnet:    #f85149;
+    --fable:     #f85149;
   }
 
   * { box-sizing: border-box; }
@@ -62,7 +62,7 @@
   }
   .swatch.session { background: var(--session); }
   .swatch.weekly  { background: var(--weekly); }
-  .swatch.sonnet  { background: var(--sonnet); }
+  .swatch.fable   { background: var(--fable); }
 
   .canvas-wrap {
     position: relative;
@@ -113,7 +113,7 @@
     <div class="legend">
       <div class="legend-item"><div class="swatch session"></div>Session</div>
       <div class="legend-item"><div class="swatch weekly"></div>Weekly</div>
-      <div class="legend-item"><div class="swatch sonnet"></div>Sonnet</div>
+      <div class="legend-item"><div class="swatch fable"></div>Fable</div>
     </div>
   </div>
   <div class="canvas-wrap">
@@ -127,11 +127,12 @@
   const COLORS = {
     session: '#3fb950',
     weekly:  '#e6c832',
-    sonnet:  '#f85149',
+    fable:   '#f85149',
     grid:    '#2d3340',
     label:   '#b0b0b0',
   };
-  // Each entry is [ts_epoch_secs, session_pct, weekly_pct, sonnet_pct].
+  // Each entry is [ts_epoch_secs, session_pct, weekly_pct, fable_pct].
+  // (4th slot carried the retired Sonnet metric on samples before 2026-07.)
   let history = [];
   let hoverIdx = -1;
 
@@ -224,7 +225,7 @@
     const series = [
       { idx: 1, color: COLORS.session },
       { idx: 2, color: COLORS.weekly  },
-      { idx: 3, color: COLORS.sonnet  },
+      { idx: 3, color: COLORS.fable   },
     ];
     for (const s of series) {
       ctx.strokeStyle = s.color;
@@ -293,8 +294,8 @@
           `<div class="label">Session</div><div class="val">${en[1].toFixed(1)}%</div></div>` +
         `<div class="row"><div class="dot" style="background:${COLORS.weekly}"></div>` +
           `<div class="label">Weekly</div><div class="val">${en[2].toFixed(1)}%</div></div>` +
-        `<div class="row"><div class="dot" style="background:${COLORS.sonnet}"></div>` +
-          `<div class="label">Sonnet</div><div class="val">${en[3].toFixed(1)}%</div></div>`;
+        `<div class="row"><div class="dot" style="background:${COLORS.fable}"></div>` +
+          `<div class="label">Fable</div><div class="val">${en[3].toFixed(1)}%</div></div>`;
       tooltip.classList.add('show');
       // Position tooltip near mouse, but flip sides if near right edge.
       const tw = tooltip.offsetWidth;

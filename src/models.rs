@@ -17,7 +17,9 @@ pub struct AppConfig {
     #[serde(default = "default_true")]        pub show_depletion_estimates: bool,
     #[serde(default = "default_true")]        pub show_session: bool,
     #[serde(default = "default_true")]        pub show_weekly: bool,
-    #[serde(default = "default_true")]        pub show_sonnet: bool,
+    // Was `show_sonnet` before the scoped weekly tracker moved Sonnet→Fable
+    // (2026-07). `alias` keeps older app_state.json files loading unchanged.
+    #[serde(default = "default_true", alias = "show_sonnet")] pub show_fable: bool,
     #[serde(default = "default_true")]        pub dashboard_on_top: bool,
     #[serde(default = "default_tray")]        pub display_mode: String,
     #[serde(default = "default_overlay_fmt")] pub overlay_format: String,
@@ -67,10 +69,10 @@ impl Default for AppConfig {
             show_depletion_estimates: true,
             show_session: true,
             show_weekly: true,
-            show_sonnet: true,
+            show_fable: true,
             dashboard_on_top: true,
             display_mode: "tray".into(),
-            overlay_format: "5-hour: {session} {s_reset}  |  Weekly: {weekly} {w_reset}  |  Sonnet: {sonnet}".into(),
+            overlay_format: "5-hour: {session} {s_reset}  |  Weekly: {weekly} {w_reset}  |  Fable: {fable} {f_reset}".into(),
             overlay_opacity: 85,
             font_family: "Segoe UI".into(),
             widget_x: None,
@@ -103,7 +105,7 @@ fn default_true()                  -> bool   { true }
 fn default_scale_pct()             -> i32    { 100 }
 fn default_poll_sec()              -> i32    { 300 }
 fn default_tray()                  -> String { "tray".into() }
-fn default_overlay_fmt()           -> String { "5-hour: {session} {s_reset}  |  Weekly: {weekly} {w_reset}  |  Sonnet: {sonnet}".into() }
+fn default_overlay_fmt()           -> String { "5-hour: {session} {s_reset}  |  Weekly: {weekly} {w_reset}  |  Fable: {fable} {f_reset}".into() }
 fn default_opacity()               -> i32    { 85 }
 fn default_font()                  -> String { "Segoe UI".into() }
 fn default_bg()                    -> String { "#1e1e2e".into() }
@@ -124,8 +126,58 @@ fn default_imgpull_vk()             -> u32    { 0x43 }    // 'C'
 pub struct UsageResponse {
     #[serde(default)] pub five_hour:        Option<UsageMetric>,
     #[serde(default)] pub seven_day:        Option<UsageMetric>,
+    // Legacy per-model weekly field. Anthropic nulled this out when the Sonnet
+    // scoped weekly limit was retired (2026-07). Kept only so older on-disk
+    // caches still parse — per-model caps now live in `limits` below.
     #[serde(default)] pub seven_day_sonnet: Option<UsageMetric>,
     #[serde(default)] pub extra_usage:      Option<ExtraUsage>,
+    // Newer, authoritative representation: one entry per active rate limit.
+    // The session and overall-weekly entries mirror five_hour/seven_day, but
+    // the *scoped* per-model weekly cap (currently the Fable model) has NO
+    // top-level equivalent — it must be read from here. See `fable_limit`.
+    #[serde(default)] pub limits:           Vec<UsageLimit>,
+}
+
+impl UsageResponse {
+    /// The scoped weekly limit that tracks the Fable model, if the API is
+    /// currently reporting one. Matches the `limits[]` entry whose
+    /// `scope.model.display_name` mentions "Fable" (case-insensitive, so a
+    /// later "Fable 5" label still matches). Returns None when no such limit
+    /// is active — callers then fall back to 0% / "—".
+    pub fn fable_limit(&self) -> Option<&UsageLimit> {
+        self.limits.iter().find(|l| {
+            l.scope
+                .as_ref()
+                .and_then(|s| s.model.as_ref())
+                .and_then(|m| m.display_name.as_deref())
+                .map(|n| n.to_ascii_lowercase().contains("fable"))
+                .unwrap_or(false)
+        })
+    }
+}
+
+/// One entry of the `limits` array — a single active rate limit. Only the
+/// fields the widget consumes are declared; serde silently drops the rest
+/// (kind, group, severity, is_active, …). The scoped per-model weekly cap
+/// names its model in `scope.model.display_name`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsageLimit {
+    // The API sends this as an integer (e.g. 34); it lands in an f64 fine.
+    // `null_as_zero_f64` guards the same single-null-freezes-everything trap
+    // that bit the top-level metrics on 2026-06-21.
+    #[serde(default, deserialize_with = "null_as_zero_f64")] pub percent: f64,
+    #[serde(default)] pub resets_at: Option<String>,
+    #[serde(default)] pub scope:     Option<LimitScope>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LimitScope {
+    #[serde(default)] pub model: Option<ScopeModel>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScopeModel {
+    #[serde(default)] pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

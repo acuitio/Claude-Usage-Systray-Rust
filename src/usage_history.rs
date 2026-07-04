@@ -1,5 +1,7 @@
 // Append-only-ish history of usage samples, bounded at 500 entries.
-// Each entry is [timestamp, sessionPct, weeklyPct, sonnetPct].
+// Each entry is [timestamp, sessionPct, weeklyPct, fablePct]. (The 4th slot
+// held the retired Sonnet scoped-weekly metric before 2026-07; older samples
+// on disk therefore carry Sonnet% there, newer ones carry Fable%.)
 
 use crate::{models::UsageHistory, paths};
 
@@ -29,12 +31,12 @@ pub fn save(history: &UsageHistory) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn append(session_pct: f64, weekly_pct: f64, sonnet_pct: f64) -> std::io::Result<()> {
+pub fn append(session_pct: f64, weekly_pct: f64, fable_pct: f64) -> std::io::Result<()> {
     let mut hist = load();
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
-    hist.push([ts, session_pct, weekly_pct, sonnet_pct]);
+    hist.push([ts, session_pct, weekly_pct, fable_pct]);
     save(&hist)
 }

@@ -211,8 +211,10 @@ fn placeholder_value(key: &str, usage: &UsageData, cfg: &AppConfig) -> (String, 
         "session" => (format!("{:.0}%", usage.session_pct), Some(pct_color_cfg(usage.session_pct, cfg))),
         "weekly"  => (format!("{:.0}%", usage.weekly_pct),  Some(pct_color_cfg(usage.weekly_pct,  cfg))),
         "sonnet"  => (format!("{:.0}%", usage.sonnet_pct),  Some(pct_color_cfg(usage.sonnet_pct,  cfg))),
+        "fable"   => (format!("{:.0}%", usage.fable_pct),   Some(pct_color_cfg(usage.fable_pct,   cfg))),
         "s_reset" => (format_reset(usage.session_reset_iso.as_deref()), None),
         "w_reset" => (format_reset(usage.weekly_reset_iso.as_deref()),  None),
+        "f_reset" => (format_reset(usage.fable_reset_iso.as_deref()),   None),
         _ => ("?".into(), None),
     }
 }
