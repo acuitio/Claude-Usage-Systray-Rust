@@ -162,7 +162,11 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
         match cmd as u16 {
             ID_MENU_DASHBOARD => dashboard::open(host),
             ID_MENU_OVERLAY   => overlay::toggle(host),
-            ID_MENU_REFRESH   => { crate::poll_service::trigger_refresh(); }
+            ID_MENU_REFRESH   => {
+                // "Refresh Now" refreshes usage *and* checks for a newer build.
+                crate::poll_service::trigger_refresh();
+                crate::update_service::trigger_check();
+            }
             ID_MENU_CHART     => chart::open(host),
             ID_MENU_SETTINGS  => settings::open(host),
             ID_MENU_IMGPASTE   => crate::imgpaste::handle_hotkey(),

@@ -47,6 +47,10 @@ const BUILD_SHA: &str = env!("BUILD_SHA");
 const BUILD_TARGET: &str = env!("BUILD_TARGET");
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
+// True while a check (download included) is in flight, so a manual "Refresh
+// Now" can't race the periodic loop into a concurrent download of the same
+// staging dir.
+static CHECKING: AtomicBool = AtomicBool::new(false);
 
 // HWND is a raw pointer (not Send); wrap it so the worker thread can hold it.
 // The host window lives for the whole process, so the pointer stays valid.
@@ -92,7 +96,28 @@ pub fn start(host: HWND) {
     });
 }
 
+/// Run one check on the current thread, serialized against any other in-flight
+/// check so two callers can't download into the same staging dir at once.
 fn check_once() {
+    if CHECKING.swap(true, Ordering::SeqCst) { return; }
+    check_once_inner();
+    CHECKING.store(false, Ordering::SeqCst);
+}
+
+/// Immediately check for a newer build on a background thread. Wired to the
+/// tray's "Refresh Now" so a manual click checks for an update as well as
+/// refreshing usage. Clears the once-per-session guard so an explicit click
+/// retries even a SHA already attempted; still honours the `auto_update`
+/// setting and the dev-build skip. The gh calls + download must not run on the
+/// UI thread, hence the spawn.
+pub fn trigger_check() {
+    thread::spawn(|| {
+        if let Ok(mut la) = LAST_ATTEMPT.lock() { *la = None; }
+        check_once();
+    });
+}
+
+fn check_once_inner() {
     // Local/dev builds carry no CI SHA and must never replace themselves.
     if BUILD_SHA == "dev" || BUILD_SHA.is_empty() { return; }
     if !config_store::load().auto_update { return; }
