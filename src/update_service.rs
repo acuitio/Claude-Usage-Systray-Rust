@@ -79,6 +79,9 @@ pub fn cleanup_old_exe() {
 /// Spawn the background checker thread. Idempotent.
 pub fn start(host: HWND) {
     if RUNNING.swap(true, Ordering::SeqCst) { return; }
+    // Log the running version on every launch — makes it easy to confirm from
+    // the captured stderr which build is live (e.g. after a self-update).
+    eprintln!("update_service: build {BUILD_SHA} ({BUILD_TARGET}) — auto-update polling started");
     *HOST.lock().unwrap() = Some(HostHandle(host as isize));
     thread::spawn(|| {
         thread::sleep(Duration::from_secs(STARTUP_DELAY_SECS));
