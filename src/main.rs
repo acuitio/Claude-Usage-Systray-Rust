@@ -38,6 +38,7 @@ mod startup_registry;
 mod state_store;
 mod tray;
 mod tray_registry_patch;
+mod update_service;
 mod usage_cache;
 mod usage_fetcher;
 mod usage_history;
@@ -95,6 +96,10 @@ fn main() {
 
         common::init_resources();
 
+        // Clean up a leftover exe from a prior self-update, on a background
+        // thread so a briefly-locked `.old` file can't delay the tray icon.
+        std::thread::spawn(update_service::cleanup_old_exe);
+
         // Hidden message-only window: hosts the tray icon's callback.
         let class_name = w!("Win32AppProtoHost");
         let instance = GetModuleHandleW(std::ptr::null());
@@ -136,6 +141,11 @@ fn main() {
         // back to the host window on every successful fetch.
         poll_service::start(host);
 
+        // Start the in-app self-updater. It checks GitHub CI (~20 s after
+        // launch, then every 30 min) for a newer build of this architecture and
+        // posts WM_UPDATE_RELAUNCH when one is downloaded and staged.
+        update_service::start(host);
+
         // Restore overlay + dashboard if they were open last session.
         overlay::open_if_persisted();
         dashboard::open_if_persisted();
@@ -167,6 +177,19 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         }
         if msg == tray::WM_XFER_STATE {
             tray::on_xfer_message(hwnd, wp);
+            return 0;
+        }
+        if msg == update_service::WM_UPDATE_RELAUNCH {
+            // A newer build is staged. install_pending() swaps the exe and
+            // spawns the new instance; only if it actually launched do we
+            // release our global hotkeys + tray icon (so the new process can
+            // claim them) and quit. On failure we keep running unchanged.
+            if update_service::install_pending() {
+                imgpaste::unregister_hotkey(hwnd);
+                imgpull::unregister_hotkey(hwnd);
+                tray::remove();
+                PostQuitMessage(0);
+            }
             return 0;
         }
         match msg {

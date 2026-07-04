@@ -221,6 +221,8 @@
       <label class="check"><input type="checkbox" id="dashboard_on_top">Dashboard always on top</label>
       <label class="check"><input type="checkbox" id="auto_refresh_token">Auto-refresh OAuth token (Path 1)</label>
       <div class="note" style="margin-left:22px">Path 1: widget refreshes its own token near expiry, avoiding 401 blips.</div>
+      <label class="check"><input type="checkbox" id="auto_update">Automatically install updates</label>
+      <div class="note" style="margin-left:22px">Checks GitHub CI ~20s after launch and every 30&nbsp;min; downloads a newer build, swaps the exe in place (window positions kept), and relaunches. Uses your <code>gh</code> login; no-ops if <code>gh</code> is unavailable.</div>
       <div class="row" style="margin-top:10px">
         <label class="field-label" for="poll_interval_sec">Polling interval (seconds, 1–1800)</label>
         <input type="number" id="poll_interval_sec" min="1" max="1800">
@@ -344,7 +346,7 @@
   // Field lists — names must match AppConfig field names (Rust serde rename
   // → JSON keys → these ids).
   const CHECKBOXES = [
-    'start_on_startup', 'dashboard_on_top', 'auto_refresh_token',
+    'start_on_startup', 'dashboard_on_top', 'auto_refresh_token', 'auto_update',
     'show_session', 'show_weekly', 'show_fable',
     'show_depletion_estimates', 'show_last_refresh',
   ];

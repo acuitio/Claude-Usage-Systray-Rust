@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 pub struct AppConfig {
     #[serde(default)]                         pub start_on_startup: bool,
     #[serde(default = "default_true")]        pub auto_refresh_token: bool,
+    // Self-update: when true the app checks GitHub CI for newer builds and
+    // installs them automatically (src/update_service.rs).
+    #[serde(default = "default_true")]        pub auto_update: bool,
     #[serde(default = "default_scale_pct")]   pub scale_pct: i32,
     #[serde(default = "default_poll_sec")]    pub poll_interval_sec: i32,
     #[serde(default = "default_true")]        pub show_last_refresh: bool,
@@ -63,6 +66,7 @@ impl Default for AppConfig {
         Self {
             start_on_startup: false,
             auto_refresh_token: true,
+            auto_update: true,
             scale_pct: 100,
             poll_interval_sec: 300,
             show_last_refresh: true,
