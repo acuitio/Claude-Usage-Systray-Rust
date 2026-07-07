@@ -20,12 +20,33 @@ const BUFFER_SEC: f64 = 300.0;
 
 static LAST_ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
+// Set to the credentials file's mtime when a refresh grant came back 400
+// (refresh token family revoked). While the file hasn't changed since, all
+// further refresh attempts are skipped — only Claude Code writing new
+// credentials (mtime change) can revive the family. 0 = not latched.
+static DEAD_FAMILY_MTIME: AtomicU64 = AtomicU64::new(0);
+
 /// Returns true if the credentials file holds a valid (fresh-enough) access
 /// token after this call. Either:
-///   - it was already fresh,
+///   - it was already fresh (skipped when `force` is true),
 ///   - we successfully refreshed and persisted, or
 ///   - false if anything went wrong (caller falls back to passive mode).
-pub fn ensure_fresh(http: &ureq::Agent) -> bool {
+///
+/// `force` skips the "already fresh?" check: a 401 from the API means the
+/// token is dead right now regardless of what expires_at claims (e.g. the
+/// refresh-token family was rotated by a re-login on another machine). The
+/// 60 s LAST_ATTEMPT throttle still applies either way, so a caller can't
+/// hammer the token endpoint just by passing force=true repeatedly.
+pub fn ensure_fresh(http: &ureq::Agent, force: bool) -> bool {
+    let mtime = credentials::mtime_secs();
+    let dead = DEAD_FAMILY_MTIME.load(Ordering::Relaxed);
+    if dead != 0 {
+        if mtime == dead {
+            return false; // family known-dead and nothing has rewritten the file
+        }
+        DEAD_FAMILY_MTIME.store(0, Ordering::Relaxed); // new file — try again
+    }
+
     let Some(creds) = credentials::read_full() else { return false; };
     let Some(oauth) = creds.claude_ai_oauth.clone() else { return false; };
     let Some(refresh_token) = oauth.refresh_token.clone() else {
@@ -33,9 +54,9 @@ pub fn ensure_fresh(http: &ureq::Agent) -> bool {
         return false;
     };
 
-    // Already fresh?
+    // Already fresh? (skipped under force — see doc comment above)
     let now_secs = unix_now_secs();
-    if (oauth.expires_at as f64) > (now_secs + BUFFER_SEC) * 1000.0 {
+    if !force && (oauth.expires_at as f64) > (now_secs + BUFFER_SEC) * 1000.0 {
         return true;
     }
 
@@ -93,6 +114,7 @@ pub fn ensure_fresh(http: &ureq::Agent) -> bool {
                 latest.claude_ai_oauth = Some(o);
 
                 if credentials::write_atomic(&latest).is_ok() {
+                    DEAD_FAMILY_MTIME.store(0, Ordering::Relaxed);
                     eprintln!("refresh ok via {url} — fresh for {expires_in}s");
                     return true;
                 }
@@ -101,8 +123,15 @@ pub fn ensure_fresh(http: &ureq::Agent) -> bool {
             Err(ureq::Error::Status(code, _)) => {
                 eprintln!("refresh {url} returned {code}");
                 // 400 = refresh token already invalidated — don't retry the
-                // fallback URL with the same dead token.
-                if code == 400 { return false; }
+                // fallback URL with the same dead token, and latch the family
+                // as dead (keyed on the current file mtime) so subsequent
+                // cycles skip refresh entirely until Claude Code rewrites the
+                // credentials file. .max(1) keeps a 0-mtime edge (file
+                // unreadable) from being mistaken for "not latched".
+                if code == 400 {
+                    DEAD_FAMILY_MTIME.store(credentials::mtime_secs().max(1), Ordering::Relaxed);
+                    return false;
+                }
             }
             Err(e) => eprintln!("refresh POST failed for {url}: {e}"),
         }

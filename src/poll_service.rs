@@ -49,41 +49,72 @@ pub fn start(host: HWND) {
     thread::spawn(move || {
         let http = build_http_agent();
 
-        // Fire immediately for first paint, then loop on interval.
-        let mut force = false;
+        // Short ticks instead of one long interval sleep. Each tick is a few
+        // local checks (no network): it lets us (a) fetch when the configured
+        // interval has genuinely elapsed, (b) notice a wall-clock jump — the
+        // machine was asleep, so refetch right away instead of waiting out the
+        // remainder — and (c) while the data is stale/auth-blocked, watch the
+        // credentials file so a `claude login` heals the widget within one
+        // tick instead of a full poll interval. All three paths go through
+        // fetch(force=false), so the cache-first and cooldown guards still
+        // decide whether any HTTP actually happens.
+        const TICK_SECS: u64 = 30;
+        let mut next_fetch_due: f64 = 0.0; // 0 = fetch on the first tick (first paint)
+        let mut last_tick_wall = unix_now();
+        let mut last_creds_mtime = crate::credentials::mtime_secs();
+
         loop {
-            use usage_fetcher::FetchOutcome::*;
-            // Record the outcome into health so the UI can show whether the
-            // numbers are live, stale, or blocked on re-auth.
-            match usage_fetcher::fetch(&http, force) {
-                Refreshed | CacheHit => crate::health::note_ok(),
-                Cooldown { remaining_seconds } => {
-                    crate::health::note_cooldown();
-                    eprintln!("poll: cooldown {remaining_seconds}s remaining");
+            let now = unix_now();
+            let slept = now - last_tick_wall > (TICK_SECS as f64) * 3.0;
+            last_tick_wall = now;
+
+            let creds_changed = {
+                let m = crate::credentials::mtime_secs();
+                if m != last_creds_mtime { last_creds_mtime = m; true } else { false }
+            };
+            let unhealthy = crate::health::status() != crate::health::Status::Live;
+
+            if now >= next_fetch_due || slept || (unhealthy && creds_changed) {
+                use usage_fetcher::FetchOutcome::*;
+                // Record the outcome into health so the UI can show whether the
+                // numbers are live, stale, or blocked on re-auth.
+                match usage_fetcher::fetch(&http, false) {
+                    Refreshed | CacheHit => crate::health::note_ok(),
+                    Cooldown { remaining_seconds } => {
+                        crate::health::note_cooldown();
+                        eprintln!("poll: cooldown {remaining_seconds}s remaining");
+                    }
+                    AuthFailed { detail } => {
+                        crate::health::note_auth();
+                        eprintln!("poll: auth failed — {detail}");
+                    }
+                    Failed { detail } => {
+                        crate::health::note_error();
+                        eprintln!("poll: fetch failed — {detail}");
+                    }
                 }
-                AuthFailed { detail } => {
-                    crate::health::note_auth();
-                    eprintln!("poll: auth failed — {detail}");
+
+                // Always nudge the UI — even on failure — so the tray/overlay can
+                // re-render the staleness indicator, not just on a successful fetch.
+                if let Some(h) = host_hwnd() {
+                    unsafe { PostMessageW(h, WM_USAGE_UPDATED, 0, 0); }
                 }
-                Failed { detail } => {
-                    crate::health::note_error();
-                    eprintln!("poll: fetch failed — {detail}");
-                }
+
+                // Re-read the interval each cycle so Settings changes apply live.
+                let interval = config_store::load().poll_interval_sec.max(1) as f64;
+                next_fetch_due = unix_now() + interval;
             }
 
-            // Always nudge the UI — even on failure — so the tray/overlay can
-            // re-render the staleness indicator, not just on a successful fetch.
-            if let Some(h) = host_hwnd() {
-                unsafe { PostMessageW(h, WM_USAGE_UPDATED, 0, 0); }
-            }
-
-            // Re-read interval each cycle so changes in Settings take effect
-            // without restarting the app.
-            let secs = config_store::load().poll_interval_sec.max(1);
-            thread::sleep(Duration::from_secs(secs as u64));
-            force = false;
+            thread::sleep(Duration::from_secs(TICK_SECS));
         }
     });
+}
+
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 fn host_hwnd() -> Option<HWND> {

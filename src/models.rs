@@ -158,6 +158,38 @@ impl UsageResponse {
                 .unwrap_or(false)
         })
     }
+
+    /// The limits[] entry with the given kind, if the API reported one.
+    fn limit_by_kind(&self, kind: &str) -> Option<&UsageLimit> {
+        self.limits.iter().find(|l| l.kind.as_deref() == Some(kind))
+    }
+
+    /// Session (5-hour) percent + reset. Prefers the legacy top-level
+    /// `five_hour` field; falls back to the `limits[]` "session" entry so the
+    /// widget survives Anthropic nulling the top-level field — exactly what
+    /// happened to `seven_day_sonnet` in 2026-07.
+    pub fn session_metric(&self) -> (f64, Option<String>) {
+        if let Some(m) = self.five_hour.as_ref() {
+            return (m.utilization, m.resets_at.clone());
+        }
+        match self.limit_by_kind("session") {
+            Some(l) => (l.percent, l.resets_at.clone()),
+            None    => (0.0, None),
+        }
+    }
+
+    /// Overall weekly percent + reset — top-level `seven_day`, falling back to
+    /// the `limits[]` "weekly_all" entry (NOT "weekly_scoped", which is the
+    /// per-model cap).
+    pub fn weekly_metric(&self) -> (f64, Option<String>) {
+        if let Some(m) = self.seven_day.as_ref() {
+            return (m.utilization, m.resets_at.clone());
+        }
+        match self.limit_by_kind("weekly_all") {
+            Some(l) => (l.percent, l.resets_at.clone()),
+            None    => (0.0, None),
+        }
+    }
 }
 
 /// One entry of the `limits` array — a single active rate limit. Only the
@@ -166,6 +198,8 @@ impl UsageResponse {
 /// names its model in `scope.model.display_name`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageLimit {
+    // "session" | "weekly_all" | "weekly_scoped" — identifies the limit.
+    #[serde(default)] pub kind: Option<String>,
     // The API sends this as an integer (e.g. 34); it lands in an f64 fine.
     // `null_as_zero_f64` guards the same single-null-freezes-everything trap
     // that bit the top-level metrics on 2026-06-21.

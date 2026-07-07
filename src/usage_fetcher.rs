@@ -37,18 +37,21 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
                 return FetchOutcome::CacheHit;
             }
         }
-        let remain = cooldown::remaining_seconds();
-        if remain > 0 {
-            return FetchOutcome::Cooldown { remaining_seconds: remain };
-        }
+    }
+    // The cooldown encodes the server's Retry-After — authoritative even for
+    // a manual "Refresh Now". `force` bypasses only our local cache-freshness
+    // heuristic, never the server's back-off signal.
+    let remain = cooldown::remaining_seconds();
+    if remain > 0 {
+        return FetchOutcome::Cooldown { remaining_seconds: remain };
     }
 
     if cfg.auto_refresh_token {
         // best-effort; we still attempt the request even if refresh declines
-        let _ = oauth_refresh::ensure_fresh(http);
+        let _ = oauth_refresh::ensure_fresh(http, false);
     }
 
-    let Some(token) = credentials::read_access_token() else {
+    let Some(mut token) = credentials::read_access_token() else {
         // A *missing* token (Claude Code signed out / cleared its creds) needs
         // the same action as a rejected one — re-login — so classify it as
         // AuthFailed, not a generic failure, to get the actionable prompt.
@@ -56,7 +59,9 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
     };
 
     let mut last_error = String::new();
-    for attempt in 0..3 {
+    let mut retried_auth = false;
+    let mut attempt = 0;
+    while attempt < 3 {
         match http
             .get(API_URL)
             .set("Authorization", &format!("Bearer {token}"))
@@ -71,8 +76,8 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
                 };
                 let _ = usage_cache::save(Some(&data), &iso_now_utc());
                 let _ = usage_history::append(
-                    data.five_hour.as_ref().map(|m| m.utilization).unwrap_or(0.0),
-                    data.seven_day.as_ref().map(|m| m.utilization).unwrap_or(0.0),
+                    data.session_metric().0,
+                    data.weekly_metric().0,
                     // 4th column is now the scoped-weekly (Fable) percent — the
                     // Sonnet field the API used to fill here is permanently null.
                     data.fable_limit().map(|l| l.percent).unwrap_or(0.0),
@@ -101,6 +106,23 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
                     let _ = cooldown::engage(retry_after.as_deref(), cooldown::SHORT_SEC);
                 }
                 if code == 401 || code == 403 {
+                    // The token can be revoked ahead of its printed expiry (a
+                    // re-login on another machine rotates the family), so
+                    // expires_at can't be trusted here. Force ONE refresh-token
+                    // attempt and retry with whatever token results — this
+                    // turns a dead-until-expiry outage into a seconds-long blip
+                    // when the refresh token is still alive. Bounded: one
+                    // retry per fetch, and ensure_fresh has its own 60 s
+                    // throttle + dead-family latch.
+                    if !retried_auth {
+                        retried_auth = true;
+                        if oauth_refresh::ensure_fresh(http, true) {
+                            if let Some(t) = credentials::read_access_token() {
+                                token = t;
+                                continue; // retry now; doesn't consume an attempt
+                            }
+                        }
+                    }
                     return FetchOutcome::AuthFailed { detail: last_error };
                 }
             }
@@ -109,9 +131,9 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
                 eprintln!("usage fetch error: {last_error}");
             }
         }
-        if attempt < 2 {
-            let delay = 5 * (attempt + 1);
-            std::thread::sleep(std::time::Duration::from_secs(delay));
+        attempt += 1;
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_secs(5 * attempt as u64));
         }
     }
 

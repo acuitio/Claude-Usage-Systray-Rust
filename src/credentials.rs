@@ -13,6 +13,18 @@ pub fn read_access_token() -> Option<String> {
     read_full()?.claude_ai_oauth?.access_token
 }
 
+/// Unix mtime (secs) of the credentials file; 0 if missing/unreadable.
+/// Used to detect "Claude Code wrote a new token" — the trigger for both the
+/// poll loop's fast auth-recovery and clearing the dead-refresh-family latch.
+pub fn mtime_secs() -> u64 {
+    std::fs::metadata(paths::credentials())
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 pub fn write_atomic(creds: &CredentialsFile) -> std::io::Result<()> {
     let path = paths::credentials();
     if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }

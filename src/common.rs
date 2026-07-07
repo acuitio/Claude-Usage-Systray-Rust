@@ -109,13 +109,15 @@ pub fn current_snapshot() -> UsageData {
                 Some(l) => (l.percent, l.resets_at.clone()),
                 None    => (0.0, None),
             };
+            let (session_pct, session_reset_iso) = d.session_metric();
+            let (weekly_pct,  weekly_reset_iso)  = d.weekly_metric();
             UsageData {
-                session_pct: d.five_hour.as_ref().map(|m| m.utilization).unwrap_or(0.0),
-                weekly_pct:  d.seven_day.as_ref().map(|m| m.utilization).unwrap_or(0.0),
+                session_pct,
+                weekly_pct,
                 sonnet_pct:  d.seven_day_sonnet.as_ref().map(|m| m.utilization).unwrap_or(0.0),
                 fable_pct,
-                session_reset_iso: d.five_hour.as_ref().and_then(|m| m.resets_at.clone()),
-                weekly_reset_iso:  d.seven_day.as_ref().and_then(|m| m.resets_at.clone()),
+                session_reset_iso,
+                weekly_reset_iso,
                 fable_reset_iso,
                 extra: d.extra_usage,
                 plan,
