@@ -695,7 +695,11 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRE
                         let (cx, cy) = clamp_to_virtual_screen(rc.left + dx, rc.top + dy, w, h);
                         SetWindowPos(hwnd, null_mut(), cx, cy, 0, 0,
                                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                        render();
+                        // No render() here: a layered window's bitmap travels
+                        // with the window — SetWindowPos moves the pixels.
+                        // Re-rendering per mousemove cost a full GDI+ pass
+                        // (incl. two Gaussian-blur shadow layers) at mouse
+                        // rate for zero visual difference.
                     }
                 }
                 0

@@ -12,33 +12,65 @@ use std::sync::Mutex;
 use crate::models::{AppConfig, AppState, CacheEnvelope, CooldownState};
 use crate::paths;
 
-// Serializes load/save across threads. The atomic-rename pattern handles
-// process-level correctness already; this prevents two threads from racing
-// load → mutate → save and clobbering each other's changes.
-static FILE_LOCK: Mutex<()> = Mutex::new(());
+// Serializes load/save across threads AND holds the parsed-state cache. The
+// cache is keyed on the file's (mtime, len): load() re-parses only when the
+// file actually changed on disk, so the hot render/tooltip paths cost one
+// stat() instead of a full read+parse — while external edits (hand-editing
+// app_state.json, or the old process writing during the brief self-update
+// overlap) are still picked up on the next call.
+struct Cached {
+    state: AppState,
+    mtime: std::time::SystemTime,
+    len:   u64,
+}
+static STATE: Mutex<Option<Cached>> = Mutex::new(None);
 
 /// Load current state for display purposes. Degrades to defaults on any
 /// error (transient read failure or parse failure) — callers that only read
 /// (tray tooltip, overlay render, dashboard snapshot) never write, so there's
 /// no risk of a transient blip getting persisted back over real settings.
 pub fn load() -> AppState {
-    let _g = FILE_LOCK.lock().unwrap();
-    load_locked().unwrap_or_default()
+    let mut slot = STATE.lock().unwrap();
+    load_cached(&mut slot).unwrap_or_default()
+}
+
+/// Cache-aware load. Returns the cached parse when the file's signature
+/// (mtime + len) is unchanged; otherwise does the full read+parse via
+/// load_locked() and refreshes the cache. Err only when the file exists but
+/// can't be read (see load_locked).
+fn load_cached(slot: &mut Option<Cached>) -> io::Result<AppState> {
+    let sig = std::fs::metadata(paths::state())
+        .ok()
+        .and_then(|m| Some((m.modified().ok()?, m.len())));
+    if let (Some(c), Some((mtime, len))) = (slot.as_ref(), sig) {
+        if c.mtime == mtime && c.len == len {
+            return Ok(c.state.clone());
+        }
+    }
+    let state = load_locked()?;
+    if let Some((mtime, len)) = sig {
+        *slot = Some(Cached { state: state.clone(), mtime, len });
+    }
+    Ok(state)
 }
 
 /// Read-modify-write under a single critical section. Always use this to
 /// mutate state — concurrent load() + save() pairs can lose each other's
 /// changes.
 pub fn update<F: FnOnce(&mut AppState)>(f: F) -> io::Result<()> {
-    let _g = FILE_LOCK.lock().unwrap();
+    let mut slot = STATE.lock().unwrap();
     // Propagating the read error here is the whole point — never mutate-and
     // -save on top of defaults we only got because the file was temporarily
     // unreadable (e.g. locked by another process, disk hiccup). A load()-side
     // fallback to defaults is harmless for a read-only display; here it would
     // silently wipe the user's real config.
-    let mut state = load_locked()?;
+    let mut state = load_cached(&mut slot)?;
     f(&mut state);
-    save_locked(&state)
+    save_locked(&state)?;
+    // Invalidate rather than update-in-place: the next load re-stats and
+    // re-caches against the freshly written file's real signature.
+    *slot = None;
+    Ok(())
 }
 
 fn load_locked() -> io::Result<AppState> {
