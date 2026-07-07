@@ -359,7 +359,7 @@
   // captured (not typed): we track mods/vk per hotkey in HK, show the chord
   // text in a read-only input, and round-trip the numbers via collectConfig.
   const MOD_ALT = 1, MOD_CTRL = 2, MOD_SHIFT = 4, MOD_WIN = 8;
-  const HK = { imgpaste: { mods: 5, vk: 0x56 }, imgpull: { mods: 5, vk: 0x44 } };
+  const HK = { imgpaste: { mods: 5, vk: 0x56 }, imgpull: { mods: 5, vk: 0x43 } };
 
   function vkName(vk) {
     if (vk >= 0x41 && vk <= 0x5A) return String.fromCharCode(vk);   // A–Z

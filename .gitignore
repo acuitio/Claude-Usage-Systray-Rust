@@ -19,3 +19,13 @@ usage_cache.json
 usage_history.json
 usage_ratelimit.json
 collector.pid
+
+# Runtime artifacts the app drops next to the exe
+*.exe
+*.exe.old
+*.exe.WebView2/
+update-staging/
+dist/
+app_state.json
+app_state.json.bak
+app_state.json.bad

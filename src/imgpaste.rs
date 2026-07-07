@@ -284,8 +284,14 @@ fn upload_image_and_paste(
     let remote_path = format!("{}/imgpaste-{}.png", remote_dir.trim_end_matches('/'), ts);
     let target = format!("{host}:{remote_path}");
 
+    // BatchMode=yes: fail fast on a key/host-key prompt instead of hanging
+    // forever waiting for input on a console the user can't see (CREATE_NO_
+    // WINDOW hides it). ConnectTimeout=10 bounds the wait for an unreachable
+    // host.
     let status = Command::new("scp")
         .arg("-q")
+        .arg("-o").arg("BatchMode=yes")
+        .arg("-o").arg("ConnectTimeout=10")
         .arg(&local_png)
         .arg(&target)
         .creation_flags(CREATE_NO_WINDOW)
@@ -342,6 +348,8 @@ fn upload_paths_and_paste(
     //    place each item *inside* subdir rather than renaming it. Single-quote
     //    the remote path so a space in remote_dir survives the remote shell.
     let mkdir = Command::new("ssh")
+        .arg("-o").arg("BatchMode=yes")
+        .arg("-o").arg("ConnectTimeout=10")
         .arg(host)
         .arg(format!("mkdir -p '{subdir}'"))
         .creation_flags(CREATE_NO_WINDOW)
@@ -361,6 +369,7 @@ fn upload_paths_and_paste(
     //    (The mkdir above DOES go through a shell, hence its quotes.)
     let mut cmd = Command::new("scp");
     cmd.arg("-q").arg("-r");
+    cmd.arg("-o").arg("BatchMode=yes").arg("-o").arg("ConnectTimeout=10");
     for src in &sources {
         cmd.arg(src);
     }

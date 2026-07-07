@@ -62,7 +62,7 @@ pub unsafe fn open(_owner: HWND) {
     };
     RegisterClassExW(&wc);
 
-    let cfg = crate::config_store::load();
+    let mut cfg = crate::config_store::load();
     let (x, y, dw, dh) = match (cfg.dashboard_x, cfg.dashboard_y, cfg.dashboard_w, cfg.dashboard_h) {
         (Some(cx), Some(cy), Some(cw), Some(ch)) => (cx, cy, cw, ch),
         _ => {
@@ -77,6 +77,8 @@ pub unsafe fn open(_owner: HWND) {
             )
         }
     };
+    // The monitor a saved position was on may have been unplugged since.
+    let (x, y) = clamp_to_virtual_screen(x, y, dw, dh);
 
     let ex_style = if cfg.dashboard_on_top { WS_EX_TOPMOST } else { 0 };
     let hwnd = CreateWindowExW(
@@ -92,7 +94,6 @@ pub unsafe fn open(_owner: HWND) {
     SetForegroundWindow(hwnd);
 
     // Mark dashboard as open so the next launch can auto-restore.
-    let mut cfg = crate::config_store::load();
     if !cfg.dashboard_open {
         cfg.dashboard_open = true;
         let _ = crate::config_store::save(&cfg);
@@ -110,6 +111,9 @@ pub unsafe fn open_if_persisted() {
 /// Persist the current window rect (x/y/w/h) to config. Called on
 /// WM_EXITSIZEMOVE and WM_DESTROY so the next launch can restore it.
 unsafe fn persist_rect(hwnd: HWND) {
+    // A minimized window reports (-32000, -32000); persisting that would
+    // restore the dashboard permanently off-screen.
+    if IsIconic(hwnd) != 0 { return; }
     let mut rc: RECT = std::mem::zeroed();
     if GetWindowRect(hwnd, &mut rc) == 0 { return; }
     let mut cfg = crate::config_store::load();
@@ -179,6 +183,8 @@ fn build_snapshot_json() -> String {
             else { format!("{}h {}m ago", secs / 3600, (secs % 3600) / 60) }
         });
 
+    let hist = crate::usage_history::load();
+
     let extra_json = match usage.extra.as_ref() {
         Some(e) => serde_json::json!({
             "is_enabled":    e.is_enabled,
@@ -196,9 +202,9 @@ fn build_snapshot_json() -> String {
         "session_reset":  session_reset,
         "weekly_reset":   weekly_reset,
         "fable_reset":    fable_reset,
-        "session_eta":    depletion_eta(1),
-        "weekly_eta":     depletion_eta(2),
-        "fable_eta":      depletion_eta(3),
+        "session_eta":    depletion_eta(&hist, 1),
+        "weekly_eta":     depletion_eta(&hist, 2),
+        "fable_eta":      depletion_eta(&hist, 3),
         "show_session":   cfg.show_session,
         "show_weekly":    cfg.show_weekly,
         "show_fable":     cfg.show_fable,
@@ -210,13 +216,15 @@ fn build_snapshot_json() -> String {
     v.to_string()
 }
 
-/// Estimate "how long until this metric hits 100%". Simple linear projection
-/// from the trend of the last two history samples. Mirrors the C# logic.
-fn depletion_eta(metric_idx: usize) -> Option<String> {
-    let hist = crate::usage_history::load();
+/// Estimate "how long until this metric hits 100%". Linear projection from
+/// the trend across the trailing ~2h of history (not the full up-to-500-
+/// sample span, which can cross a weekly reset and make the trend garbage).
+/// Mirrors the C# logic.
+fn depletion_eta(hist: &crate::models::UsageHistory, metric_idx: usize) -> Option<String> {
     if hist.len() < 2 { return None; }
-    let first = &hist[0];
-    let last  = &hist[hist.len() - 1];
+    let last = hist.last()?;
+    let cutoff = last[0] - 7200.0;
+    let first = hist.iter().find(|e| e[0] >= cutoff)?;
     let dt = last[0] - first[0];
     if dt < 60.0 { return Some("need more time".into()); }
     let dp = last[metric_idx] - first[metric_idx];

@@ -49,8 +49,8 @@ pub struct AppConfig {
     #[serde(default = "default_imgpaste_dir")] pub imgpaste_remote_dir: String,
     #[serde(default = "default_imgpaste_mods")] pub imgpaste_hotkey_mods: u32,
     #[serde(default = "default_imgpaste_vk")]  pub imgpaste_hotkey_vk: u32,
-    // imgpull — Alt+Shift+D scps a remote file/dir (path copied from the
-    // terminal) to a local temp dir and loads it onto the clipboard as
+    // imgpull — the Get hotkey (default Alt+Shift+C) scps a remote file/dir
+    // (path copied from the terminal) to a local temp dir and loads it onto the clipboard as
     // CF_HDROP, so Ctrl+V in Explorer/Desktop pastes it. Reuses imgpaste_host
     // as the source. See src/imgpull.rs.
     #[serde(default = "default_true")]          pub imgpull_enabled: bool,
@@ -217,6 +217,10 @@ fn null_as_zero_f64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Er
 pub struct CredentialsFile {
     #[serde(rename = "claudeAiOauth", default)]
     pub claude_ai_oauth: Option<OauthBlock>,
+    // Anything Claude Code stores that we don't model — preserved verbatim
+    // through our read-modify-write of its credentials file.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -228,6 +232,12 @@ pub struct OauthBlock {
     #[serde(default)] pub scopes:           Option<Vec<String>>,
     #[serde(default)] pub subscription_type:Option<String>,
     #[serde(default)] pub rate_limit_tier:  Option<String>,
+    // Anything Claude Code stores under claudeAiOauth that we don't model —
+    // preserved verbatim through our read-modify-write of its credentials
+    // file. `rename_all = "camelCase"` doesn't touch a flattened map; keys
+    // pass through verbatim.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 // ─── OAuth refresh + profile (used by the future HTTP layer) ─────────

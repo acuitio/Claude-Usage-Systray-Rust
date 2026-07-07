@@ -54,8 +54,46 @@ use windows_sys::Win32::UI::HiDpi::*;
 use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+/// Single-instance guard via a named mutex. Returns false if another instance
+/// is already running (after a grace period) — the caller should exit.
+///
+/// The grace period matters: a self-update relaunch (see update_service.rs)
+/// intentionally overlaps old and new processes for a moment — the new
+/// instance must WAIT for the old one to exit (releasing the mutex at process
+/// teardown) rather than bail immediately. ~10 s covers the slowest teardown;
+/// a genuine second instance still shows the message box after it.
+unsafe fn acquire_single_instance() -> bool {
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    for _ in 0..20 {
+        let h = CreateMutexW(std::ptr::null(), 1, w!("ClaudeUsageSystray-SingleInstance"));
+        if h.is_null() {
+            return true; // can't create a mutex at all — don't block startup over it
+        }
+        if GetLastError() != ERROR_ALREADY_EXISTS {
+            // We own it. Hold the handle for the process lifetime (never closed;
+            // the OS releases it at exit, which is exactly the semantics we want).
+            return true;
+        }
+        CloseHandle(h);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    false
+}
+
 fn main() {
     unsafe {
+        // Refuse to run twice: two instances mean duplicate tray icons, failed
+        // hotkey registrations, and two pollers fighting over the state file.
+        if !acquire_single_instance() {
+            MessageBoxW(
+                null_mut(),
+                w!("Claude Usage Systray is already running.\n\nLook for its icon in the system tray."),
+                w!("Claude Usage Systray"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+            return;
+        }
+
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
         let icc = INITCOMMONCONTROLSEX {

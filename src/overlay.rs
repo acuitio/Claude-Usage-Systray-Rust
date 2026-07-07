@@ -744,26 +744,3 @@ fn lparam_to_point(lp: LPARAM) -> POINT {
         y: ((lp >> 16) & 0xffff) as i16 as i32,
     }
 }
-
-/// Clamp `(x, y)` to the full-monitor area of whichever monitor it's
-/// closest to. We use rcMonitor (not rcWork) so the user can drag the
-/// overlay over the taskbar's footprint; the topmost re-assertion timer
-/// keeps it visually above.
-unsafe fn clamp_to_virtual_screen(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
-    let pt = POINT { x: x + w / 2, y: y + h / 2 };
-    let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-    let mut mi: MONITORINFO = std::mem::zeroed();
-    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-    let rc = if GetMonitorInfoW(monitor, &mut mi) != 0 {
-        mi.rcMonitor
-    } else {
-        RECT {
-            left: 0, top: 0,
-            right:  GetSystemMetrics(SM_CXSCREEN),
-            bottom: GetSystemMetrics(SM_CYSCREEN),
-        }
-    };
-    let max_x = (rc.right  - w).max(rc.left);
-    let max_y = (rc.bottom - h).max(rc.top);
-    (x.clamp(rc.left, max_x), y.clamp(rc.top, max_y))
-}

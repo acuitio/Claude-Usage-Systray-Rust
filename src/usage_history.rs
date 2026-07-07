@@ -7,6 +7,11 @@ use crate::{models::UsageHistory, paths};
 
 pub const MAX_ENTRIES: usize = 500;
 
+// append() is called from the poll thread AND ad-hoc "Refresh Now" threads;
+// unserialized, both write the same .json.tmp and can publish interleaved
+// garbage through the atomic rename (or drop a sample).
+static APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn load() -> UsageHistory {
     let path = paths::history();
     if !path.exists() { return Vec::new(); }
@@ -32,6 +37,7 @@ pub fn save(history: &UsageHistory) -> std::io::Result<()> {
 }
 
 pub fn append(session_pct: f64, weekly_pct: f64, fable_pct: f64) -> std::io::Result<()> {
+    let _g = APPEND_LOCK.lock().unwrap();
     let mut hist = load();
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

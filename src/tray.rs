@@ -144,10 +144,18 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
         AppendMenuW(menu, MF_STRING, ID_MENU_SETTINGS as usize, w!("Settings"));
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
-        AppendMenuW(menu, MF_STRING, ID_MENU_IMGPASTE as usize,
-            w!("Send Clipboard Image/Files\tAlt+Shift+V"));
-        AppendMenuW(menu, MF_STRING, ID_MENU_IMGPULL as usize,
-            w!("Get Remote → Clipboard\tAlt+Shift+D"));
+        // The chords are user-configurable (Settings → Hotkeys), so the menu
+        // labels must reflect what's actually registered rather than a
+        // hardcoded default.
+        let cfg = crate::config_store::load();
+        let paste_label = wstr(&format!(
+            "Send Clipboard Image/Files\t{}",
+            chord_label(cfg.imgpaste_hotkey_mods, cfg.imgpaste_hotkey_vk)));
+        let pull_label = wstr(&format!(
+            "Get Remote → Clipboard\t{}",
+            chord_label(cfg.imgpull_hotkey_mods, cfg.imgpull_hotkey_vk)));
+        AppendMenuW(menu, MF_STRING, ID_MENU_IMGPASTE as usize, paste_label.as_ptr());
+        AppendMenuW(menu, MF_STRING, ID_MENU_IMGPULL as usize, pull_label.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
         AppendMenuW(menu, MF_STRING, ID_MENU_QUIT as usize, w!("Quit"));

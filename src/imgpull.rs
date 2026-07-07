@@ -1,10 +1,11 @@
-// Remote → local puller, bound to Alt+Shift+D. The reverse of imgpaste:
+// Remote → local puller, bound to the configured Get hotkey (default
+// Alt+Shift+C). The reverse of imgpaste:
 //
 //   1. In your SSH terminal, select a remote file/dir path and Ctrl+C it
 //      (the path lands on the Windows clipboard as plain text).
-//   2. Press Alt+Shift+D — this reads that path, `scp -r` pulls it from the
-//      configured host into a local temp dir, then loads the local copy onto
-//      the clipboard as CF_HDROP (with DropEffect=Copy) and pops a tray
+//   2. Press the Get hotkey — this reads that path, `scp -r` pulls it from
+//      the configured host into a local temp dir, then loads the local copy
+//      onto the clipboard as CF_HDROP (with DropEffect=Copy) and pops a tray
 //      "ready" balloon.
 //   3. Ctrl+V in File Explorer, on the Desktop, or in any open folder — the
 //      real file/folder is pasted there.
@@ -87,9 +88,11 @@ pub fn handle_hotkey() {
         None => {
             log("no text on clipboard to interpret as a remote path");
             unsafe {
+                let cfg = config_store::load();
+                let chord = crate::common::chord_label(cfg.imgpull_hotkey_mods, cfg.imgpull_hotkey_vk);
                 crate::tray::notify(
                     "Nothing to fetch",
-                    "Copy a remote file path in your terminal, then press Alt+Shift+D.",
+                    &format!("Copy a remote file path in your terminal, then press {chord}."),
                 );
             }
             IN_FLIGHT.store(false, Ordering::SeqCst);
@@ -168,9 +171,14 @@ fn run_pull(remote_path: &str) -> Result<String, String> {
     // inside it as localdir/basename. Remote path is unquoted: SFTP uses it
     // literally (no remote shell), so spaces are fine and quotes would break
     // realpath (see imgpaste.rs for the same lesson).
+    // BatchMode=yes: fail fast on a key/host-key prompt instead of hanging
+    // forever on a console the user can't see (CREATE_NO_WINDOW hides it).
+    // ConnectTimeout=10 bounds the wait for an unreachable host.
     let status = Command::new("scp")
         .arg("-q")
         .arg("-r")
+        .arg("-o").arg("BatchMode=yes")
+        .arg("-o").arg("ConnectTimeout=10")
         .arg(format!("{host}:{remote}"))
         .arg(&local_dir)
         .creation_flags(CREATE_NO_WINDOW)

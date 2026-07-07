@@ -30,6 +30,24 @@ pub fn wstr(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// "Ctrl+Alt+Shift+V"-style label for a Win32 hotkey (MOD_* bitmask + VK code).
+/// Mirrors chordText() in assets/settings.html so UI surfaces agree.
+pub fn chord_label(mods: u32, vk: u32) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if mods & 0x0002 != 0 { parts.push("Ctrl"); }
+    if mods & 0x0001 != 0 { parts.push("Alt"); }
+    if mods & 0x0004 != 0 { parts.push("Shift"); }
+    if mods & 0x0008 != 0 { parts.push("Win"); }
+    let key = match vk {
+        0x30..=0x39 | 0x41..=0x5A => char::from(vk as u8).to_string(), // 0-9, A-Z
+        0x70..=0x87 => format!("F{}", vk - 0x6F),                      // F1-F24
+        _ => format!("0x{vk:X}"),
+    };
+    let mut s = parts.join("+");
+    if !s.is_empty() { s.push('+'); }
+    s + &key
+}
+
 /// Parse "#RRGGBB" → COLORREF (0x00BBGGRR). Returns None on malformed input.
 pub fn hex_to_colorref(s: &str) -> Option<u32> {
     let s = s.trim_start_matches('#');
@@ -164,3 +182,26 @@ fn unix_from_ymdhm(y: i32, mo: u32, d: u32, h: u32, mn: u32) -> i64 {
 }
 
 fn is_leap(y: i32) -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
+
+/// Clamp `(x, y)` to the full-monitor area of whichever monitor it's
+/// closest to. We use rcMonitor (not rcWork) so the user can drag the
+/// overlay over the taskbar's footprint; the topmost re-assertion timer
+/// keeps it visually above.
+pub unsafe fn clamp_to_virtual_screen(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
+    let pt = POINT { x: x + w / 2, y: y + h / 2 };
+    let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+    let mut mi: MONITORINFO = std::mem::zeroed();
+    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    let rc = if GetMonitorInfoW(monitor, &mut mi) != 0 {
+        mi.rcMonitor
+    } else {
+        RECT {
+            left: 0, top: 0,
+            right:  GetSystemMetrics(SM_CXSCREEN),
+            bottom: GetSystemMetrics(SM_CYSCREEN),
+        }
+    };
+    let max_x = (rc.right  - w).max(rc.left);
+    let max_y = (rc.bottom - h).max(rc.top);
+    (x.clamp(rc.left, max_x), y.clamp(rc.top, max_y))
+}

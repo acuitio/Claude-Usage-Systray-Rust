@@ -17,9 +17,13 @@ use crate::paths;
 // load → mutate → save and clobbering each other's changes.
 static FILE_LOCK: Mutex<()> = Mutex::new(());
 
+/// Load current state for display purposes. Degrades to defaults on any
+/// error (transient read failure or parse failure) — callers that only read
+/// (tray tooltip, overlay render, dashboard snapshot) never write, so there's
+/// no risk of a transient blip getting persisted back over real settings.
 pub fn load() -> AppState {
     let _g = FILE_LOCK.lock().unwrap();
-    load_locked()
+    load_locked().unwrap_or_default()
 }
 
 /// Read-modify-write under a single critical section. Always use this to
@@ -27,18 +31,27 @@ pub fn load() -> AppState {
 /// changes.
 pub fn update<F: FnOnce(&mut AppState)>(f: F) -> io::Result<()> {
     let _g = FILE_LOCK.lock().unwrap();
-    let mut state = load_locked();
+    // Propagating the read error here is the whole point — never mutate-and
+    // -save on top of defaults we only got because the file was temporarily
+    // unreadable (e.g. locked by another process, disk hiccup). A load()-side
+    // fallback to defaults is harmless for a read-only display; here it would
+    // silently wipe the user's real config.
+    let mut state = load_locked()?;
     f(&mut state);
     save_locked(&state)
 }
 
-fn load_locked() -> AppState {
+fn load_locked() -> io::Result<AppState> {
     migrate_if_needed();
     let path = paths::state();
-    if !path.exists() { return AppState::default(); }
+    if !path.exists() { return Ok(AppState::default()); }
     let bytes = match std::fs::read(&path) {
-        Ok(b)  => b,
-        Err(_) => return AppState::default(),
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(AppState::default()),
+        Err(e) => {
+            log_line(&format!("read failed (state preserved, save skipped): {e}"));
+            return Err(e);
+        }
     };
     // Tolerate a UTF-8 BOM. serde_json rejects a leading EF BB BF, and any
     // editor or PowerShell `Set-Content -Encoding utf8` that touches this
@@ -48,14 +61,16 @@ fn load_locked() -> AppState {
         None           => &bytes[..],
     };
     match serde_json::from_slice(slice) {
-        Ok(state) => state,
+        Ok(state) => Ok(state),
         Err(e) => {
             // Never silently discard the user's settings on a parse error:
             // the immediate fallback-to-default would be saved straight back
             // over the file on the next write, destroying any chance of
-            // recovery. Preserve the offending file and leave a breadcrumb.
+            // recovery. Preserve the offending file (the .bad rename) and
+            // leave a breadcrumb, then hand back defaults — safe here because
+            // the original bytes are no longer at risk of being overwritten.
             log_parse_error(&path, &e);
-            AppState::default()
+            Ok(AppState::default())
         }
     }
 }
@@ -63,13 +78,19 @@ fn load_locked() -> AppState {
 /// Move an unparseable state file aside (so the next save can't clobber it)
 /// and append a one-line note. Best-effort — failures here are non-fatal.
 fn log_parse_error(path: &std::path::Path, err: &serde_json::Error) {
-    use std::io::Write;
     let _ = std::fs::rename(path, path.with_extension("json.bad"));
+    log_line(&format!("parse failed, saved as app_state.json.bad: {err}"));
+}
+
+/// Append one line to state_store.log. Best-effort — failures here are
+/// non-fatal.
+fn log_line(msg: &str) {
+    use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true).append(true)
         .open(paths::app_dir().join("state_store.log"))
     {
-        let _ = writeln!(f, "parse failed, saved as app_state.json.bad: {err}");
+        let _ = writeln!(f, "{msg}");
     }
 }
 

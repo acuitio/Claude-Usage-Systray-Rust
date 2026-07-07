@@ -20,6 +20,7 @@
 // absent or unauthenticated every step degrades to a logged no-op — the app is
 // never blocked or broken by the updater.
 
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +40,9 @@ pub const WM_UPDATE_RELAUNCH: u32 = WM_APP + 4;
 const REPO: &str = "paulmah79/Claude-Usage-Systray-Rust";
 const CHECK_INTERVAL_SECS: u64 = 1800; // 30 min
 const STARTUP_DELAY_SECS:  u64 = 20;   // let first paint + poll settle first
+
+// Suppresses the console window flash when shelling out to gh.exe.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Commit this binary was built from (full 40-char SHA), or "dev" for local
 /// builds — which never self-update. Set by build.rs from GITHUB_SHA.
@@ -153,6 +157,7 @@ fn latest_successful() -> Option<(String, String)> {
             "run", "list", "-R", REPO, "--workflow", "CI", "--branch", "main",
             "--status", "success", "--limit", "1", "--json", "headSha,databaseId",
         ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
     if !out.status.success() { return None; }
@@ -174,6 +179,7 @@ fn download_and_stage(sha: &str, run_id: &str) -> std::io::Result<PathBuf> {
     let status = Command::new("gh")
         .args(["run", "download", run_id, "-R", REPO, "--name", &artifact, "--dir"])
         .arg(&staging)
+        .creation_flags(CREATE_NO_WINDOW)
         .status()?;
     if !status.success() {
         return Err(io_err("gh run download failed"));

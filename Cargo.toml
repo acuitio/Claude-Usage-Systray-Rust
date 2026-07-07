@@ -21,10 +21,14 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_GdiPlus",
+    # Pulls in SECURITY_ATTRIBUTES — CreateMutexW's first param, needed by the
+    # single-instance guard in main.rs. We only ever pass null for it.
+    "Win32_Security",
     "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Registry",
+    "Win32_System_Threading",
 ] }
 
 # JSON I/O for config / cache / history / cooldown / credentials.
