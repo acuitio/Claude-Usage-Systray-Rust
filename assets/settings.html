@@ -415,7 +415,15 @@
     });
   }
 
+  // The full AppConfig object as last pushed by Rust. collectConfig() mutates
+  // ONLY the form-controlled fields on this object and returns the WHOLE
+  // thing, so fields with no form control (window positions, enabled flags,
+  // anything added to AppConfig later) round-trip untouched — no Rust-side
+  // preserve list to keep in sync.
+  let CFG = null;
+
   function applyConfig(cfg) {
+    CFG = cfg;
     for (const id of CHECKBOXES) document.getElementById(id).checked = !!cfg[id];
     for (const id of NUMBERS)   document.getElementById(id).value   = cfg[id];
     for (const id of STRINGS)   document.getElementById(id).value   = cfg[id];
@@ -437,20 +445,23 @@
   const NUM_DEFAULTS = { overlay_opacity: 85, scale_pct: 100, poll_interval_sec: 300 };
 
   function collectConfig() {
-    const cfg = {};
-    for (const id of CHECKBOXES) cfg[id] = document.getElementById(id).checked;
+    // Refuse to fabricate a config from form fields alone: a partial object
+    // would deserialize with serde defaults for everything missing and wipe
+    // the non-form fields. No CFG = the initial push hasn't arrived yet.
+    if (!CFG) return null;
+    for (const id of CHECKBOXES) CFG[id] = document.getElementById(id).checked;
     for (const id of NUMBERS) {
       let v = parseInt(document.getElementById(id).value, 10);
       if (isNaN(v)) v = NUM_DEFAULTS[id];
-      cfg[id] = v;
+      CFG[id] = v;
     }
-    for (const id of STRINGS)   cfg[id] = document.getElementById(id).value;
-    for (const id of COLORS)    cfg[id] = document.getElementById(id).value;
-    cfg.imgpaste_hotkey_mods = HK.imgpaste.mods;
-    cfg.imgpaste_hotkey_vk   = HK.imgpaste.vk;
-    cfg.imgpull_hotkey_mods  = HK.imgpull.mods;
-    cfg.imgpull_hotkey_vk    = HK.imgpull.vk;
-    return cfg;
+    for (const id of STRINGS)   CFG[id] = document.getElementById(id).value;
+    for (const id of COLORS)    CFG[id] = document.getElementById(id).value;
+    CFG.imgpaste_hotkey_mods = HK.imgpaste.mods;
+    CFG.imgpaste_hotkey_vk   = HK.imgpaste.vk;
+    CFG.imgpull_hotkey_mods  = HK.imgpull.mods;
+    CFG.imgpull_hotkey_vk    = HK.imgpull.vk;
+    return CFG;
   }
 
   function setStatus(text, isErr) {
@@ -476,8 +487,16 @@
     }
   }
 
-  function apply()        { postCmd({ cmd: 'apply',     cfg: collectConfig() }); }
-  function saveAndExit()  { postCmd({ cmd: 'save_exit', cfg: collectConfig() }); }
+  function apply() {
+    const cfg = collectConfig();
+    if (!cfg) { setStatus('Settings not loaded yet — try again in a moment', true); return; }
+    postCmd({ cmd: 'apply', cfg });
+  }
+  function saveAndExit() {
+    const cfg = collectConfig();
+    if (!cfg) { setStatus('Settings not loaded yet — try again in a moment', true); return; }
+    postCmd({ cmd: 'save_exit', cfg });
+  }
   function resetDefaults(){ if (confirm('Reset all settings to defaults?')) postCmd({ cmd: 'reset_defaults' }); }
 
   // Bind via addEventListener (inline onclick can be blocked by WebView2's
@@ -499,7 +518,10 @@
   }
 
   window.applyConfig = applyConfig;
-  window.chrome?.webview?.postMessage({ cmd: 'ready' });
+  // Must be a STRING — wry's WebView2 handler uses TryGetWebMessageAsString,
+  // which silently drops objects (see postCmd). This "ready" ping was dead
+  // for that reason; the page-load handler masked it.
+  window.chrome?.webview?.postMessage(JSON.stringify({ cmd: 'ready' }));
 </script>
 </body>
 </html>

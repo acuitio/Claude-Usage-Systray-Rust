@@ -131,7 +131,22 @@ fn handle_ipc(req: wry::http::Request<String>) {
             close_window();
         }
         "reset_defaults" => {
-            let defaults = AppConfig::default();
+            // Defaults for everything the form shows — but keep window
+            // geometry. Positions aren't represented in the form, so "Reset
+            // to defaults" shouldn't teleport the overlay/dashboard; the page
+            // stores this composite as its CFG, and a subsequent Apply
+            // round-trips it wholesale.
+            let old = config_store::load();
+            let defaults = AppConfig {
+                widget_x:       old.widget_x,
+                widget_y:       old.widget_y,
+                dashboard_open: old.dashboard_open,
+                dashboard_x:    old.dashboard_x,
+                dashboard_y:    old.dashboard_y,
+                dashboard_w:    old.dashboard_w,
+                dashboard_h:    old.dashboard_h,
+                ..AppConfig::default()
+            };
             if let Ok(json) = serde_json::to_string(&defaults) {
                 let js = format!("window.applyConfig && window.applyConfig({json})");
                 WEBVIEW.with(|c| {
@@ -149,24 +164,27 @@ fn save_with_side_effects(cfg_val: &serde_json::Value) {
     let Ok(new_cfg): Result<AppConfig, _> = serde_json::from_value(cfg_val.clone()) else { return; };
     let old_cfg = config_store::load();
 
-    // The form doesn't edit overlay drag position or the legacy
-    // background_collection fields. Replacing the whole AppConfig on Apply
-    // would wipe them. Merge: take the form fields from `new_cfg`, keep the
-    // non-form fields from `old_cfg`.
+    // The page round-trips the FULL config object Rust pushed to it, mutating
+    // only its form-controlled fields (see CFG in settings.html). Non-form
+    // fields — enabled flags, anything added to AppConfig later — arrive back
+    // verbatim, so new fields survive Apply without registration anywhere.
     //
-    // The imgpaste/imgpull *enabled* flags aren't editable in the UI — preserve
-    // them so Apply doesn't reset them to defaults via serde. The hotkey
-    // mods/vk ARE editable now and come through the form via `..new_cfg`.
+    // One exception: window geometry + open-state are owned by the overlay
+    // and dashboard windows and can change while Settings sits open (drag the
+    // overlay, move the dashboard). The page's CFG snapshot would round-trip
+    // the values from when Settings opened, silently reverting those live
+    // changes — so take the freshest on-disk values for exactly this
+    // "owned elsewhere" set. Unlike the old full preserve-list, forgetting a
+    // future field here degrades to stale-while-Settings-open, not
+    // wiped-on-Apply.
     let merged = AppConfig {
-        widget_x:         old_cfg.widget_x,
-        widget_y:         old_cfg.widget_y,
-        dashboard_open:   old_cfg.dashboard_open,
-        dashboard_x:      old_cfg.dashboard_x,
-        dashboard_y:      old_cfg.dashboard_y,
-        dashboard_w:      old_cfg.dashboard_w,
-        dashboard_h:      old_cfg.dashboard_h,
-        imgpaste_enabled: old_cfg.imgpaste_enabled,
-        imgpull_enabled:  old_cfg.imgpull_enabled,
+        widget_x:       old_cfg.widget_x,
+        widget_y:       old_cfg.widget_y,
+        dashboard_open: old_cfg.dashboard_open,
+        dashboard_x:    old_cfg.dashboard_x,
+        dashboard_y:    old_cfg.dashboard_y,
+        dashboard_w:    old_cfg.dashboard_w,
+        dashboard_h:    old_cfg.dashboard_h,
         ..new_cfg
     };
 
