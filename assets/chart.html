@@ -38,12 +38,47 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
   }
   h2 {
     margin: 0;
     font-size: 14px;
     font-weight: 600;
     letter-spacing: 0.1px;
+  }
+  /* Segmented range selector. */
+  .ranges {
+    display: inline-flex;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .ranges button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--fg-dim);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .ranges button:hover { color: var(--fg); }
+  .ranges button.active {
+    background: var(--weekly);
+    color: #1a1a2e;
+    font-weight: 600;
   }
   .legend {
     display: flex;
@@ -109,7 +144,16 @@
 <body>
 <div class="container">
   <div class="header">
-    <h2>Usage History</h2>
+    <div class="header-left">
+      <h2>Usage History</h2>
+      <div class="ranges" id="ranges">
+        <button type="button" data-secs="auto" class="active">Auto</button>
+        <button type="button" data-secs="86400">24h</button>
+        <button type="button" data-secs="259200">3d</button>
+        <button type="button" data-secs="604800">7d</button>
+        <button type="button" data-secs="1209600">14d</button>
+      </div>
+    </div>
     <div class="legend">
       <div class="legend-item"><div class="swatch session"></div>Session</div>
       <div class="legend-item"><div class="swatch weekly"></div>Weekly</div>
@@ -133,8 +177,17 @@
   };
   // Each entry is [ts_epoch_secs, session_pct, weekly_pct, fable_pct].
   // (4th slot carried the retired Sonnet metric on samples before 2026-07.)
-  let history = [];
-  let hoverIdx = -1;
+  let history = [];           // full retained history from Rust (≤ 14 days)
+  let view = [];              // `history` clipped to the visible range
+  let hoverIdx = -1;          // index into `view`, not `history`
+  // Selected range: 'auto' sizes the span to the window width; otherwise a
+  // fixed number of seconds. Default 'auto'.
+  let rangeMode = 'auto';
+  // Pixels of plot width per day in Auto mode. Tuned so the default ~760px
+  // window shows ~1 week, and the span grows to the full 2 weeks (capped by
+  // retention) once the window is roughly twice as wide.
+  const AUTO_PX_PER_DAY = 92;
+  const MAX_RANGE_DAYS  = 14;
 
   const canvas  = document.getElementById('canvas');
   const ctx     = canvas.getContext('2d');
@@ -148,10 +201,36 @@
 
   function formatTick(epoch, spanSecs) {
     const d = new Date(epoch * 1000);
+    if (spanSecs > 3 * 86400) {
+      // Multi-day span: date only, else labels collide.
+      return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+    }
     if (spanSecs > 86400) {
       return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     }
     return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  // Resolve the visible window (seconds) for a given plot width. In Auto mode
+  // the span scales with width — ~1 week at the default size, up to 2 weeks
+  // when wide — clamped to [1 day, MAX_RANGE_DAYS]. Fixed modes ignore width.
+  function effectiveRangeSecs(gw) {
+    if (rangeMode === 'auto') {
+      const days = Math.max(1, Math.min(MAX_RANGE_DAYS, gw / AUTO_PX_PER_DAY));
+      return days * 86400;
+    }
+    return rangeMode;
+  }
+
+  // Clip `history` to `rangeSecs`, measured back from the newest sample (where
+  // the plot's right edge sits). history is chronological, so drop a leading
+  // run. If the window is wider than the data, everything is returned.
+  function clipHistory(rangeSecs) {
+    if (!history || history.length === 0) return [];
+    const cutoff = history[history.length - 1][0] - rangeSecs;
+    let i = 0;
+    while (i < history.length && history[i][0] < cutoff) i++;
+    return history.slice(i);
   }
 
   function formatTooltipTs(epoch) {
@@ -181,22 +260,35 @@
     ctx.clearRect(0, 0, w, h);
 
     if (!history || history.length < 2) {
+      emptyEl.textContent = 'Insufficient data — waiting for more samples.';
       emptyEl.classList.add('show');
       return;
     }
-    emptyEl.classList.remove('show');
 
     const padL = 48, padR = 18, padT = 16, padB = 28;
     const gw = w - padL - padR;
     const gh = h - padT - padB;
     if (gw <= 10 || gh <= 10) return;
 
-    const t0    = history[0][0];
-    const t1    = history[history.length - 1][0];
+    // Auto mode sizes the span from gw, so resolve the window now that the
+    // plot geometry is known.
+    view = clipHistory(effectiveRangeSecs(gw));
+
+    if (view.length < 2) {
+      // History exists, but the chosen window is too narrow to hold 2 points.
+      emptyEl.textContent = 'No samples in the selected range yet.';
+      emptyEl.classList.add('show');
+      hoverIdx = -1;
+      return;
+    }
+    emptyEl.classList.remove('show');
+
+    const t0    = view[0][0];
+    const t1    = view[view.length - 1][0];
     const tSpan = Math.max(1, t1 - t0);
     geom = { padL, padR, padT, padB, gw, gh, t0, tSpan };
 
-    // Grid + Y labels.
+    // Horizontal grid + Y labels.
     ctx.strokeStyle = COLORS.grid;
     ctx.lineWidth   = 1;
     ctx.fillStyle   = COLORS.label;
@@ -212,16 +304,26 @@
       ctx.fillText((100 - i * 25) + '%', padL - 6, y);
     }
 
-    // X-axis tick labels — 3 evenly spaced.
+    // X-axis: adaptive tick count (~one per 120px) with light vertical
+    // gridlines. More ticks keep multi-week spans legible.
+    const nSeg = Math.max(2, Math.min(7, Math.round(gw / 120)));
+    ctx.strokeStyle  = COLORS.grid;
+    ctx.fillStyle    = COLORS.label;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'top';
-    for (let i = 0; i <= 2; i++) {
-      const x = padL + gw * i / 2;
-      const t = t0 + tSpan * i / 2;
+    for (let i = 0; i <= nSeg; i++) {
+      const x = padL + gw * i / nSeg;
+      const t = t0 + tSpan * i / nSeg;
+      if (i > 0 && i < nSeg) {
+        ctx.beginPath();
+        ctx.moveTo(x, padT);
+        ctx.lineTo(x, padT + gh);
+        ctx.stroke();
+      }
       ctx.fillText(formatTick(t, tSpan), x, padT + gh + 6);
     }
 
-    // Plot each series.
+    // Plot each series over the visible window.
     const series = [
       { idx: 1, color: COLORS.session },
       { idx: 2, color: COLORS.weekly  },
@@ -233,9 +335,9 @@
       ctx.lineJoin    = 'round';
       ctx.lineCap     = 'round';
       ctx.beginPath();
-      for (let i = 0; i < history.length; i++) {
-        const ts  = history[i][0];
-        const val = history[i][s.idx];
+      for (let i = 0; i < view.length; i++) {
+        const ts  = view[i][0];
+        const val = view[i][s.idx];
         const x = padL + ((ts - t0) / tSpan) * gw;
         const y = padT + (1 - val / 100) * gh;
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
@@ -244,8 +346,8 @@
     }
 
     // Hover crosshair + dots.
-    if (hoverIdx >= 0 && hoverIdx < history.length) {
-      const e = history[hoverIdx];
+    if (hoverIdx >= 0 && hoverIdx < view.length) {
+      const e = view[hoverIdx];
       const x = padL + ((e[0] - t0) / tSpan) * gw;
       ctx.strokeStyle = 'rgba(255,255,255,0.18)';
       ctx.lineWidth = 1;
@@ -264,13 +366,14 @@
   }
 
   function pickIndex(mouseX) {
-    if (history.length < 2) return -1;
+    if (view.length < 2) return -1;
     const { padL, gw, t0, tSpan } = geom;
-    // Linear search; history is bounded at 500 entries, so this is fine.
+    // Linear search over the visible window — bounded by the selected range,
+    // so this stays cheap even with a 30-day history on disk.
     let best = 0;
     let bestDist = Infinity;
-    for (let i = 0; i < history.length; i++) {
-      const x = padL + ((history[i][0] - t0) / tSpan) * gw;
+    for (let i = 0; i < view.length; i++) {
+      const x = padL + ((view[i][0] - t0) / tSpan) * gw;
       const d = Math.abs(x - mouseX);
       if (d < bestDist) { bestDist = d; best = i; }
     }
@@ -287,7 +390,7 @@
       draw();
     }
     if (hoverIdx >= 0) {
-      const en = history[hoverIdx];
+      const en = view[hoverIdx];
       tooltip.innerHTML =
         `<div class="ts">${formatTooltipTs(en[0])}</div>` +
         `<div class="row"><div class="dot" style="background:${COLORS.session}"></div>` +
@@ -315,6 +418,20 @@
   });
 
   window.addEventListener('resize', draw);
+
+  // Range selector — rescale the x-axis without asking Rust for new data.
+  document.getElementById('ranges').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button[data-secs]');
+    if (!btn) return;
+    const v = btn.dataset.secs;
+    rangeMode = v === 'auto' ? 'auto' : (parseInt(v, 10) || 'auto');
+    for (const b of document.querySelectorAll('#ranges button')) {
+      b.classList.toggle('active', b === btn);
+    }
+    hoverIdx = -1;
+    tooltip.classList.remove('show');
+    draw();
+  });
 
   // Rust pushes history here.
   window.applyHistory = function (h) {
