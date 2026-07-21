@@ -22,6 +22,7 @@ const ID_MENU_SETTINGS:  u16 = 9004;
 const ID_MENU_CHART:     u16 = 9006;
 const ID_MENU_IMGPASTE:   u16 = 9007;
 const ID_MENU_IMGPULL:    u16 = 9008;
+const ID_MENU_SIGNIN:    u16 = 9009;
 const ID_MENU_QUIT:      u16 = 9005;
 
 // The hidden host window that receives our tray callback. Set once at
@@ -141,6 +142,9 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
         AppendMenuW(menu, MF_STRING, ID_MENU_REFRESH as usize,  w!("Refresh Now"));
+        // Sign in launches `claude auth login`; the badge on the tray icon
+        // turns red when this is the action that's needed (token rejected).
+        AppendMenuW(menu, MF_STRING, ID_MENU_SIGNIN as usize,   w!("Sign in to Claude"));
         AppendMenuW(menu, MF_STRING, ID_MENU_SETTINGS as usize, w!("Settings"));
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
@@ -176,6 +180,7 @@ pub unsafe fn handle_tray_callback(host: HWND, lp: LPARAM) {
                 crate::update_service::trigger_check();
             }
             ID_MENU_CHART     => chart::open(host),
+            ID_MENU_SIGNIN    => spawn_claude_login(),
             ID_MENU_SETTINGS  => settings::open(host),
             ID_MENU_IMGPASTE   => crate::imgpaste::handle_hotkey(),
             ID_MENU_IMGPULL    => crate::imgpull::handle_hotkey(),
@@ -207,6 +212,35 @@ pub unsafe fn refresh() {
     Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
+/// Launch `claude auth login` in a fresh console window so the user can
+/// complete the interactive browser sign-in. This app is a windows-subsystem
+/// binary with no console of its own, so we must allocate one
+/// (CREATE_NEW_CONSOLE) — otherwise the CLI has nowhere to print the auth URL
+/// or read the confirmation. We reuse the `claude` CLI (already the sole
+/// writer of ~/.claude/.credentials.json) rather than reimplementing OAuth.
+/// Once login rewrites the credentials file, the poll loop's "unhealthy &&
+/// credentials changed" heal path re-syncs within ~30s and family_is_dead()
+/// self-clears — so there's nothing more to do here.
+fn spawn_claude_login() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    if std::process::Command::new("claude")
+        .args(["auth", "login", "--claudeai"])
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+        .is_err()
+    {
+        // PATH miss or CLI absent — tell the user how to do it by hand rather
+        // than failing silently (the menu click would look like a no-op).
+        unsafe {
+            notify(
+                "Couldn't launch sign-in",
+                "Run this in a terminal:  claude auth login",
+            );
+        }
+    }
+}
+
 /// Fire a one-time balloon when health crosses into Auth (sign-in needed) or
 /// recovers from it. Stale↔Live transitions stay silent — the icon badge and
 /// tooltip carry those without nagging.
@@ -215,7 +249,7 @@ unsafe fn maybe_notify_health_change(badge: u8) {
     if badge == BADGE_AUTH && prev != BADGE_AUTH {
         notify(
             "Claude sign-in needed",
-            "Usage updates are paused. Run `claude login`, then click Refresh Now.",
+            "Usage updates are paused. Right-click the tray → Sign in to Claude.",
         );
     } else if prev == BADGE_AUTH && badge != BADGE_AUTH {
         notify("Usage updates resumed", "Sign-in restored — numbers are live again.");
@@ -237,7 +271,7 @@ unsafe fn write_tooltip(buf: &mut [u16], usage: &crate::common::UsageData) {
         crate::health::Status::Stale =>
             format!("\n⚠ Not updating — last OK {} ago", crate::health::cache_age_label()),
         crate::health::Status::Auth =>
-            "\n⚠ Sign-in needed — run: claude login".to_string(),
+            "\n⚠ Sign-in needed — tray → Sign in to Claude".to_string(),
     };
     let tip_str = format!(
         "Usage: {:.0}% | {:.0}% | {:.0}%\n{}{}{}",

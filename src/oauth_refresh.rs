@@ -139,6 +139,30 @@ pub fn ensure_fresh(http: &ureq::Agent, force: bool) -> bool {
     false
 }
 
+/// True when a prior refresh POST returned 400 (the refresh-token family was
+/// revoked) AND the credentials file hasn't been rewritten since. In that
+/// state every usage GET would only 401, and a steady drip of them provokes a
+/// harsh server-side 429 whose hour-long Retry-After then blocks recovery even
+/// after the user re-authenticates (a cooldown is separate state from auth, so
+/// it outlives the re-login). Callers should therefore stop hitting the API
+/// entirely while this holds. Self-clears — and returns false — the instant
+/// `claude auth login` rewrites the file (mtime change), so the next poll
+/// after sign-in proceeds normally with zero extra plumbing.
+pub fn family_is_dead() -> bool {
+    let dead = DEAD_FAMILY_MTIME.load(Ordering::Relaxed);
+    if dead == 0 {
+        return false;
+    }
+    // Compare against the same `.max(1)` form the latch was stored with
+    // (line where the 400 is handled) so a 0-mtime edge can't false-match.
+    let mtime = credentials::mtime_secs().max(1);
+    if mtime != dead {
+        DEAD_FAMILY_MTIME.store(0, Ordering::Relaxed); // file rewritten — revive
+        return false;
+    }
+    true
+}
+
 fn unix_now_secs() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

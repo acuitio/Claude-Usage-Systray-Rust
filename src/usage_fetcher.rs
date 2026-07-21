@@ -46,6 +46,18 @@ pub fn fetch(http: &ureq::Agent, force: bool) -> FetchOutcome {
         return FetchOutcome::Cooldown { remaining_seconds: remain };
     }
 
+    // If the refresh-token family is known-dead (a prior 400) and nothing has
+    // rewritten the credentials file since, stop calling the API altogether.
+    // Each GET would only 401, and a steady drip of them provokes a server 429
+    // whose hour-long Retry-After then blocks recovery even after re-auth. This
+    // self-clears the moment `claude auth login` rewrites the file, so the next
+    // poll unblocks on its own.
+    if oauth_refresh::family_is_dead() {
+        return FetchOutcome::AuthFailed {
+            detail: "Sign-in expired — run: claude auth login".into(),
+        };
+    }
+
     if cfg.auto_refresh_token {
         // best-effort; we still attempt the request even if refresh declines
         let _ = oauth_refresh::ensure_fresh(http, false);
