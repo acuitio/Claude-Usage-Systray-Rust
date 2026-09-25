@@ -273,15 +273,62 @@ unsafe fn write_tooltip(buf: &mut [u16], usage: &crate::common::UsageData) {
         crate::health::Status::Auth =>
             "\n⚠ Sign-in needed — tray → Sign in to Claude".to_string(),
     };
-    let tip_str = format!(
-        "Usage: {:.0}% | {:.0}% | {:.0}%\n{}{}{}",
-        usage.session_pct, usage.weekly_pct, usage.fable_pct, usage.plan, suffix, status_line,
+    let head = format!(
+        "Usage: {:.0}% | {:.0}% | {:.0}%\n{}{}",
+        usage.session_pct, usage.weekly_pct, usage.fable_pct, usage.plan, suffix,
     );
+    let (alt, codex, codex_short) = feed_lines();
+    let tip_str = compose_tooltip(&head, alt.as_deref(), codex.as_deref(), codex_short.as_deref(), &status_line);
     let tip = wstr(&tip_str);
     let limit = buf.len().min(127);
     for (i, c) in tip.iter().take(limit).enumerate() {
         buf[i] = *c;
     }
+}
+
+/// GX10 feed lines for the tooltip: ALT, Codex with projection, Codex without.
+/// All None when the feed is off or has never answered.
+fn feed_lines() -> (Option<String>, Option<String>, Option<String>) {
+    use crate::quota_feed::{find, is_stale, poll_interval};
+    let cfg = crate::config_store::load();
+    if cfg.quota_feed_url.is_empty() { return (None, None, None); }
+    let Some(data) = crate::state_store::load().quota_feed.and_then(|e| e.data) else { return (None, None, None); };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    let interval = poll_interval(Some(&data));
+    let pct = |m: &str, w: &str| find(&data, m, w).and_then(|s| s.pct)
+        .map_or_else(|| "--".to_string(), |p| format!("{p:.0}%"));
+    let old = |pairs: &[(&str, &str)]| {
+        let newest = pairs.iter().filter_map(|(m, w)| find(&data, m, w).and_then(|s| s.observed_at))
+            .fold(None, |a: Option<f64>, v| Some(a.map_or(v, |a| a.max(v))));
+        if is_stale(newest, now, interval) { " (old)" } else { "" }
+    };
+    let alt = cfg.show_alt.then(|| format!(
+        "Alt: {} | {} | {}{}",
+        pct("claude_alt", "five_hour"), pct("claude_alt", "seven_day"), pct("claude_alt", "seven_day_fable"),
+        old(&[("claude_alt", "five_hour"), ("claude_alt", "seven_day"), ("claude_alt", "seven_day_fable")]),
+    ));
+    if !cfg.show_codex { return (alt, None, None); }
+    let codex_old = old(&[("codex", "codex_primary")]);
+    let short = format!("Codex wk: {}{codex_old}", pct("codex", "codex_primary"));
+    let full = find(&data, "codex", "codex_primary").and_then(|s| s.projection.as_ref()).and_then(|p| p.pct)
+        .map(|p| format!("Codex wk: {} (proj {p:.0}%){codex_old}", pct("codex", "codex_primary")));
+    (alt, Some(full.unwrap_or_else(|| short.clone())), Some(short))
+}
+
+/// Windows caps the tooltip at 127 UTF-16 units. The status line always
+/// survives: drop the Codex projection first, then the ALT line, then Codex.
+fn compose_tooltip(head: &str, alt: Option<&str>, codex: Option<&str>, codex_short: Option<&str>, status: &str) -> String {
+    let build = |a: Option<&str>, c: Option<&str>| {
+        let mut s = head.to_string();
+        for line in [a, c].into_iter().flatten() { s.push('\n'); s.push_str(line); }
+        s.push_str(status);
+        s
+    };
+    [(alt, codex), (alt, codex_short), (None, codex_short), (None, None)].into_iter()
+        .map(|(a, c)| build(a, c))
+        .find(|s| s.encode_utf16().count() <= 127)
+        .unwrap_or_else(|| build(None, None))
 }
 
 pub unsafe fn remove() {
@@ -631,4 +678,27 @@ unsafe fn draw_cross(hdc: HDC) {
     LineTo(hdc, 16, 48);
     SelectObject(hdc, op);
     DeleteObject(pen as HGDIOBJ);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compose_tooltip;
+
+    #[test]
+    fn worst_case_tooltip_fits_and_keeps_warning() {
+        let head = "Usage: 100% | 100% | 100%\nClaude Max 20x \u{b7} Rate-limited 23h 59m";
+        let warn = "\n\u{26a0} Not updating, last OK 23h 59m ago";
+        let tip = compose_tooltip(head, Some("Alt: 100% | 100% | 100% (old)"),
+            Some("Codex wk: 100% (proj 999%) (old)"), Some("Codex wk: 100% (old)"), warn);
+        assert!(tip.encode_utf16().count() <= 127);
+        assert!(tip.ends_with(warn));
+        assert!(tip.contains("Codex wk"));
+    }
+
+    #[test]
+    fn all_lines_kept_when_they_fit() {
+        let tip = compose_tooltip("Usage: 1% | 2% | 3%\nPro", Some("Alt: 0% | 50% | 43%"),
+            Some("Codex wk: 74% (proj 197%)"), Some("Codex wk: 74%"), "");
+        assert_eq!(tip, "Usage: 1% | 2% | 3%\nPro\nAlt: 0% | 50% | 43%\nCodex wk: 74% (proj 197%)");
+    }
 }
