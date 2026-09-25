@@ -150,6 +150,9 @@ fn build_tokens(
     text_color: u32,
 ) -> Vec<OverlayToken> {
     let mut tokens = Vec::new();
+    let feed = if cfg.quota_feed_url.is_empty() { None } else { crate::state_store::load().quota_feed.and_then(|e| e.data) };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64()).unwrap_or(0.0);
     let bytes = fmt.as_bytes();
     let mut i = 0;
     let mut text_start = 0;
@@ -161,7 +164,10 @@ fn build_tokens(
                     emit_plain(&fmt[text_start..i], &mut tokens, text_color);
                 }
                 let key = &fmt[i + 1..i + 1 + rel_close];
-                let (display, pct_color) = placeholder_value(key, usage, cfg);
+                let (display, pct_color) = match feed_value(key, feed.as_ref(), now) {
+                    Some((text, pct)) => (text, pct.map(|p| pct_color_cfg(p, cfg))),
+                    None => placeholder_value(key, usage, cfg),
+                };
                 let has_color = pct_color.is_some();
                 tokens.push(OverlayToken {
                     kind:  TokenKind::Text,
@@ -217,6 +223,36 @@ fn placeholder_value(key: &str, usage: &UsageData, cfg: &AppConfig) -> (String, 
         "f_reset" => (format_reset(usage.fable_reset_iso.as_deref()),   None),
         _ => ("?".into(), None),
     }
+}
+
+/// GX10 feed placeholders; None when `key` is not one. The pct is Some only
+/// for a fresh, known reading, so unknown or stale values render grey.
+fn feed_value(key: &str, feed: Option<&crate::models::QuotaFeedResponse>, now: f64) -> Option<(String, Option<f64>)> {
+    use crate::quota_feed::{find, is_stale, poll_interval};
+    let (meter, window, kind) = match key {
+        "alt_session" => ("claude_alt", "five_hour", 'p'),
+        "alt_weekly"  => ("claude_alt", "seven_day", 'p'),
+        "alt_fable"   => ("claude_alt", "seven_day_fable", 'p'),
+        "alt_s_reset" => ("claude_alt", "five_hour", 'r'),
+        "alt_w_reset" => ("claude_alt", "seven_day", 'r'),
+        "alt_f_reset" => ("claude_alt", "seven_day_fable", 'r'),
+        "codex"       => ("codex", "codex_primary", 'p'),
+        "codex_reset" => ("codex", "codex_primary", 'r'),
+        "codex_proj"  => ("codex", "codex_primary", 'j'),
+        _ => return None,
+    };
+    let row = feed.and_then(|f| find(f, meter, window));
+    let fresh = row.is_some_and(|r| !is_stale(r.observed_at, now, poll_interval(feed)));
+    let dash = || "--".to_string();
+    Some(match kind {
+        'p' => match row.and_then(|r| r.pct) {
+            Some(p) => (format!("{p:.0}%"), fresh.then_some(p)),
+            None => (dash(), None),
+        },
+        'r' => (row.and_then(|r| r.resets_at).map(crate::dashboard::format_unix_reset).unwrap_or_else(dash), None),
+        _ => (row.and_then(|r| r.projection.as_ref()).and_then(|p| p.pct)
+            .map_or_else(dash, |p| format!("proj {p:.0}%")), None),
+    })
 }
 
 fn pct_color_cfg(pct: f64, cfg: &AppConfig) -> u32 {
@@ -746,5 +782,34 @@ fn lparam_to_point(lp: LPARAM) -> POINT {
     POINT {
         x: (lp & 0xffff) as i16 as i32,
         y: ((lp >> 16) & 0xffff) as i16 as i32,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::feed_value;
+
+    const FEED: &str = r#"{"freshness":{"poll_interval_seconds":300},"series":[
+        {"meter":"claude_alt","window":"seven_day","pct":50.4,"resets_at":null,"observed_at":1000,"projection":null},
+        {"meter":"claude_alt","window":"five_hour","pct":null,"observed_at":1000},
+        {"meter":"codex","window":"codex_primary","pct":74,"observed_at":1000,"projection":{"pct":197.2}}]}"#;
+
+    #[test]
+    fn feed_placeholders_map_and_dash_unknown() {
+        let feed = crate::quota_feed::parse(FEED.as_bytes()).unwrap();
+        let f = Some(&feed);
+        assert_eq!(feed_value("alt_weekly", f, 1100.0), Some(("50%".into(), Some(50.4))));
+        assert_eq!(feed_value("alt_session", f, 1100.0), Some(("--".into(), None)));
+        assert_eq!(feed_value("alt_fable", f, 1100.0), Some(("--".into(), None)));
+        assert_eq!(feed_value("alt_w_reset", f, 1100.0), Some(("--".into(), None)));
+        assert_eq!(feed_value("codex_proj", f, 1100.0), Some(("proj 197%".into(), None)));
+        assert_eq!(feed_value("codex", None, 1100.0), Some(("--".into(), None)));
+        assert_eq!(feed_value("session", f, 1100.0), None);
+    }
+
+    #[test]
+    fn stale_feed_value_loses_colour() {
+        let feed = crate::quota_feed::parse(FEED.as_bytes()).unwrap();
+        assert_eq!(feed_value("codex", Some(&feed), 1000.0 + 901.0), Some(("74%".into(), None)));
     }
 }

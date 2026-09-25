@@ -261,7 +261,7 @@ fn age_text(age: f64) -> String {
     else { format!("{}h {}m ago", secs / 3600, (secs % 3600) / 60) }
 }
 
-fn format_unix_reset(reset_at: f64) -> String {
+pub(crate) fn format_unix_reset(reset_at: f64) -> String {
     if !reset_at.is_finite() { return "--".into(); }
     let seconds = (reset_at - unix_now()).max(0.0) as i64;
     let minutes = seconds / 60;
