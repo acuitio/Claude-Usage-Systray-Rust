@@ -16,6 +16,7 @@ pub fn state()         -> PathBuf { app_dir().join("app_state.json") }
 /// Time-series history. Kept separate — it grows over time and is the only
 /// runtime file safe to delete (the chart just starts empty again).
 pub fn history()       -> PathBuf { app_dir().join("usage_history.json") }
+pub fn quota_feed_history() -> PathBuf { app_dir().join("quota_feed_history.json") }
 
 // Legacy paths from the pre-consolidation layout — read once on first run
 // for migration, then deleted.

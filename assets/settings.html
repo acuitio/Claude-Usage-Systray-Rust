@@ -299,6 +299,17 @@
     </details>
 
     <details class="section" open>
+      <summary>GX10 quota feed</summary>
+      <div class="row">
+        <label class="field-label" for="quota_feed_url">Feed URL</label>
+        <input type="text" class="wide" id="quota_feed_url" placeholder="http://&lt;gx10-tailnet-ip&gt;:8400/api/quota-now">
+      </div>
+      <div class="note" style="margin-left:0">Paste the tailnet-only GX10 quota endpoint. Leave blank to hide these cards.</div>
+      <label class="check"><input type="checkbox" id="show_alt">Show Claude ALT</label>
+      <label class="check"><input type="checkbox" id="show_codex">Show Codex</label>
+    </details>
+
+    <details class="section" open>
       <summary>File Transfer (SSH)</summary>
       <div class="row">
         <label class="field-label" for="imgpaste_host">Remote host</label>
@@ -347,11 +358,11 @@
   // → JSON keys → these ids).
   const CHECKBOXES = [
     'start_on_startup', 'dashboard_on_top', 'auto_refresh_token', 'auto_update',
-    'show_session', 'show_weekly', 'show_fable',
+    'show_session', 'show_weekly', 'show_fable', 'show_alt', 'show_codex',
     'show_depletion_estimates', 'show_last_refresh',
   ];
   const NUMBERS  = ['overlay_opacity', 'scale_pct', 'poll_interval_sec'];
-  const STRINGS  = ['display_mode', 'overlay_format', 'font_family', 'imgpaste_host', 'imgpaste_remote_dir', 'imgpull_remote_base'];
+  const STRINGS  = ['display_mode', 'overlay_format', 'font_family', 'quota_feed_url', 'imgpaste_host', 'imgpaste_remote_dir', 'imgpull_remote_base'];
   const COLORS   = ['bg_color', 'color_text', 'color_sufficient', 'color_partial', 'color_depleted'];
 
   // ── Hotkey capture state + helpers ──────────────────────────────────

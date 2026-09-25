@@ -23,6 +23,10 @@ pub struct AppConfig {
     // Was `show_sonnet` before the scoped weekly tracker moved Sonnet→Fable
     // (2026-07). `alias` keeps older app_state.json files loading unchanged.
     #[serde(default = "default_true", alias = "show_sonnet")] pub show_fable: bool,
+    // Empty means the optional GX10 ALT/Codex feed is disabled.
+    #[serde(default)]                         pub quota_feed_url: String,
+    #[serde(default = "default_true")]        pub show_alt: bool,
+    #[serde(default = "default_true")]        pub show_codex: bool,
     #[serde(default = "default_true")]        pub dashboard_on_top: bool,
     #[serde(default = "default_tray")]        pub display_mode: String,
     #[serde(default = "default_overlay_fmt")] pub overlay_format: String,
@@ -74,6 +78,9 @@ impl Default for AppConfig {
             show_session: true,
             show_weekly: true,
             show_fable: true,
+            quota_feed_url: String::new(),
+            show_alt: true,
+            show_codex: true,
             dashboard_on_top: true,
             display_mode: "tray".into(),
             overlay_format: "5-hour: {session} {s_reset}  |  Weekly: {weekly} {w_reset}  |  Fable: {fable} {f_reset}".into(),
@@ -294,6 +301,46 @@ pub struct CacheEnvelope {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuotaFreshness {
+    #[serde(default)] pub poll_interval_seconds: Option<f64>,
+    #[serde(default)] pub max_backoff_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuotaProjection {
+    #[serde(default)] pub pct: Option<f64>,
+    #[serde(default)] pub at: Option<f64>,
+    #[serde(default)] pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuotaSeries {
+    #[serde(default)] pub meter: String,
+    #[serde(default)] pub window: String,
+    #[serde(default)] pub label: String,
+    #[serde(default)] pub pct: Option<f64>,
+    #[serde(default)] pub resets_at: Option<f64>,
+    #[serde(default)] pub observed_at: Option<f64>,
+    #[serde(default)] pub projection: Option<QuotaProjection>,
+    #[serde(default)] pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuotaFeedResponse {
+    #[serde(default)] pub freshness: Option<QuotaFreshness>,
+    #[serde(default)] pub series: Vec<QuotaSeries>,
+    #[serde(default)] pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuotaFeedEnvelope {
+    #[serde(default)] pub data: Option<QuotaFeedResponse>,
+    #[serde(default)] pub fetched_at: f64,
+    #[serde(default)] pub last_attempt_at: f64,
+    #[serde(default)] pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CooldownState {
     #[serde(default)] pub cooldown_until: f64,
 }
@@ -306,6 +353,7 @@ pub struct AppState {
     #[serde(default)] pub config:   AppConfig,
     #[serde(default)] pub cache:    Option<CacheEnvelope>,
     #[serde(default)] pub cooldown: CooldownState,
+    #[serde(default)] pub quota_feed: Option<QuotaFeedEnvelope>,
 }
 
 // History is stored as `[[ts, sp, wp, snp], ...]` — a plain Vec<[f64; 4]>

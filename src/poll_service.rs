@@ -10,7 +10,7 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
-use crate::{config_store, usage_fetcher};
+use crate::{config_store, quota_feed, usage_fetcher};
 
 pub const WM_USAGE_UPDATED: u32 = WM_APP + 2;
 
@@ -60,6 +60,8 @@ pub fn start(host: HWND) {
         // decide whether any HTTP actually happens.
         const TICK_SECS: u64 = 30;
         let mut next_fetch_due: f64 = 0.0; // 0 = fetch on the first tick (first paint)
+        let mut next_quota_feed_due: f64 = 0.0;
+        let mut quota_feed_failures = 0u32;
         let mut last_tick_wall = unix_now();
         let mut last_creds_mtime = crate::credentials::mtime_secs();
 
@@ -105,6 +107,32 @@ pub fn start(host: HWND) {
                 next_fetch_due = unix_now() + interval;
             }
 
+            // The GX10 feed has a separate cadence and failure backoff. Its
+            // result deliberately never changes main-account health or tray state.
+            let quota_cfg = config_store::load();
+            if quota_cfg.quota_feed_url.is_empty() {
+                next_quota_feed_due = 0.0;
+                quota_feed_failures = 0;
+            } else if now >= next_quota_feed_due || slept {
+                match quota_feed::fetch(&quota_cfg.quota_feed_url) {
+                    quota_feed::FetchOutcome::Refreshed => quota_feed_failures = 0,
+                    quota_feed::FetchOutcome::Failed(detail) => {
+                        quota_feed_failures = quota_feed_failures.saturating_add(1);
+                        eprintln!("quota feed fetch failed: {detail}");
+                    }
+                }
+                let feed = crate::state_store::load().quota_feed;
+                let response = feed.as_ref().and_then(|f| f.data.as_ref());
+                next_quota_feed_due = unix_now() + quota_feed::next_delay(
+                    quota_feed_failures,
+                    quota_feed::poll_interval(response),
+                    quota_feed::max_backoff(response),
+                );
+                if let Some(h) = host_hwnd() {
+                    unsafe { PostMessageW(h, WM_USAGE_UPDATED, 0, 0); }
+                }
+            }
+
             thread::sleep(Duration::from_secs(TICK_SECS));
         }
     });
@@ -143,6 +171,12 @@ pub fn trigger_refresh() {
             Cooldown { .. }      => crate::health::note_cooldown(),
             AuthFailed { .. }    => crate::health::note_auth(),
             Failed { .. }        => crate::health::note_error(),
+        }
+        let quota_cfg = config_store::load();
+        if !quota_cfg.quota_feed_url.is_empty() {
+            if let quota_feed::FetchOutcome::Failed(detail) = quota_feed::fetch(&quota_cfg.quota_feed_url) {
+                eprintln!("quota feed refresh failed: {detail}");
+            }
         }
         if let Some(addr) = host_addr {
             unsafe { PostMessageW(addr as HWND, WM_USAGE_UPDATED, 0, 0); }

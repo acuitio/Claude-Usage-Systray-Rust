@@ -44,6 +44,16 @@ What's implemented:
   positions survive because config lives beside the exe. See the
   "Self-update" section below.
 
+## GX10 quota feed
+
+The Dashboard can also show Claude ALT session and weekly limits plus the
+Codex weekly limit from a GX10 quota feed. It is tailnet-only: open Settings,
+paste the GX10 `/api/quota-now` URL into **GX10 quota feed**, then choose which
+of the Claude ALT and Codex cards to show. Leave the URL blank to keep the
+feature off. The app keeps the last successful reading when GX10 is
+unreachable and marks it as old; this never changes the main account's tray
+health or icon.
+
 ## imgpaste — clipboard image over SSH
 
 When you press `Alt+Shift+V` (or pick "Send Clipboard Image" from the

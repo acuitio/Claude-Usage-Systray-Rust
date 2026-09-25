@@ -194,6 +194,23 @@ fn build_snapshot_json() -> String {
         None => serde_json::Value::Null,
     };
 
+    let quota_envelope = crate::state_store::load().quota_feed;
+    let quota_data = quota_envelope.as_ref().and_then(|e| e.data.as_ref());
+    let quota_interval = crate::quota_feed::poll_interval(quota_data);
+    let now = unix_now();
+    let alt = serde_json::json!({
+        "session": quota_meter_json(quota_data, "claude_alt", "five_hour", now, quota_interval),
+        "weekly": quota_meter_json(quota_data, "claude_alt", "seven_day", now, quota_interval),
+        "fable": quota_meter_json(quota_data, "claude_alt", "seven_day_fable", now, quota_interval),
+        "last_error": quota_envelope.as_ref().and_then(|e| e.last_error.clone()),
+        "last_attempt_at": quota_envelope.as_ref().map(|e| e.last_attempt_at),
+    });
+    let codex = serde_json::json!({
+        "weekly": quota_meter_json(quota_data, "codex", "codex_primary", now, quota_interval),
+        "last_error": quota_envelope.as_ref().and_then(|e| e.last_error.clone()),
+        "last_attempt_at": quota_envelope.as_ref().map(|e| e.last_attempt_at),
+    });
+
     let v = serde_json::json!({
         "plan":           usage.plan,
         "session_pct":    usage.session_pct,
@@ -210,10 +227,52 @@ fn build_snapshot_json() -> String {
         "show_fable":     cfg.show_fable,
         "show_depletion_estimates": cfg.show_depletion_estimates,
         "show_last_refresh":        cfg.show_last_refresh,
+        "quota_feed_enabled": !cfg.quota_feed_url.is_empty(),
+        "show_alt": cfg.show_alt,
+        "show_codex": cfg.show_codex,
+        "alt": alt,
+        "codex": codex,
         "last_refresh_ago": last_refresh_ago,
         "extra":          extra_json,
     });
     v.to_string()
+}
+
+fn quota_meter_json(
+    data: Option<&crate::models::QuotaFeedResponse>, meter: &str, window: &str,
+    now: f64, poll_interval: f64,
+) -> serde_json::Value {
+    let row = data.and_then(|response| crate::quota_feed::find(response, meter, window));
+    serde_json::json!({
+        "pct": row.and_then(|r| r.pct),
+        "reset": row.and_then(|r| r.resets_at).map(format_unix_reset).unwrap_or_else(|| "--".into()),
+        "projection": row.and_then(|r| r.projection.as_ref()).and_then(|p| p.label.clone()),
+        "observed_at": row.and_then(|r| r.observed_at),
+        "observed_age": row.and_then(|r| r.observed_at).map(|at| age_text(now - at)),
+        "stale": row.map(|r| crate::quota_feed::is_stale(r.observed_at, now, poll_interval)).unwrap_or(true),
+        "reason": row.and_then(|r| r.reason.clone()),
+    })
+}
+
+fn age_text(age: f64) -> String {
+    let secs = age.max(0.0) as i64;
+    if secs < 60 { format!("{secs}s ago") }
+    else if secs < 3600 { format!("{}m ago", secs / 60) }
+    else { format!("{}h {}m ago", secs / 3600, (secs % 3600) / 60) }
+}
+
+fn format_unix_reset(reset_at: f64) -> String {
+    if !reset_at.is_finite() { return "--".into(); }
+    let seconds = (reset_at - unix_now()).max(0.0) as i64;
+    let minutes = seconds / 60;
+    if minutes >= 1440 { format!("{}d {}h", minutes / 1440, (minutes / 60) % 24) }
+    else if minutes >= 60 { format!("{}h {}m", minutes / 60, minutes % 60) }
+    else { format!("{minutes}m") }
+}
+
+fn unix_now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
 /// Estimate "how long until this metric hits 100%". Linear projection from

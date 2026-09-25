@@ -33,6 +33,7 @@ mod oauth_refresh;
 mod overlay;
 mod paths;
 mod poll_service;
+mod quota_feed;
 mod settings;
 mod startup_registry;
 mod state_store;

@@ -122,6 +122,12 @@
   }
   .bar-eta.warn { color: var(--red); }
 
+  .quota-card { display: flex; flex-direction: column; gap: 8px; }
+  .quota-card.dim { opacity: 0.52; }
+  .quota-title { font-size: 14px; font-weight: 600; }
+  .quota-observed, .quota-status { color: var(--fg-dim); font-size: 11px; }
+  .quota-status { color: var(--red); }
+
   /* ── Extra usage ──────────────────────────────────────────────── */
   .extra-title {
     font-size: 13px;
@@ -189,7 +195,24 @@
   </div>
   <hr class="sep">
 
-  <div id="bars"></div>
+  <div class="quota-card">
+    <div class="quota-title">Claude (this PC)</div>
+    <div id="bars"></div>
+  </div>
+
+  <div class="quota-card" id="alt-card">
+    <div class="quota-title">Claude ALT</div>
+    <div class="quota-observed" id="alt-observed"></div>
+    <div class="quota-status" id="alt-status"></div>
+    <div id="alt-bars"></div>
+  </div>
+
+  <div class="quota-card" id="codex-card">
+    <div class="quota-title">Codex</div>
+    <div class="quota-observed" id="codex-observed"></div>
+    <div class="quota-status" id="codex-status"></div>
+    <div id="codex-bars"></div>
+  </div>
 
   <hr class="sep">
 
@@ -208,24 +231,57 @@
   }
 
   function renderBar(label, pct, resetStr, eta, showEta) {
-    const t = tone(pct);
+    const known = typeof pct === 'number' && Number.isFinite(pct);
+    const t = tone(known ? pct : 0);
     const etaCls = (eta && !eta.startsWith('Insufficient') && !eta.startsWith('—')) ? 'warn' : '';
     const etaHtml = showEta
-      ? `<div class="bar-eta ${etaCls}">100% ETA: ${eta || 'Insufficient data'}</div>`
+      ? `<div class="bar-eta ${etaCls}">${eta || 'Insufficient data'}</div>`
       : '';
     return `
       <div class="bar-group">
         <div class="bar-row">
           <div class="bar-label">${label}</div>
-          <div class="bar-pct ${t}">${pct.toFixed(0)}%</div>
+          <div class="bar-pct ${t}">${known ? pct.toFixed(0) + '%' : '--'}</div>
         </div>
-        <div class="bar-track"><div class="bar-fill ${t}" style="width: ${Math.min(100, pct)}%"></div></div>
+        <div class="bar-track"><div class="bar-fill ${t}" style="width: ${known ? Math.max(0, Math.min(100, pct)) : 0}%"></div></div>
         <div class="bar-meta">
           <span>Resets in ${resetStr}</span>
         </div>
         ${etaHtml}
       </div>
     `;
+  }
+
+  function esc(v) {
+    return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function clock(ts) {
+    if (typeof ts !== 'number') return 'unknown time';
+    return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function renderQuotaCard(id, block, bars) {
+    const card = document.getElementById(id + '-card');
+    const observed = bars.map(b => b.observed_at).filter(v => typeof v === 'number');
+    const newest = observed.length ? Math.max(...observed) : null;
+    const stale = bars.some(b => b.stale);
+    card.classList.toggle('dim', stale || !!block.last_error);
+    document.getElementById(id + '-observed').textContent = newest == null
+      ? 'via GX10, no reading yet'
+      : `via GX10, observed ${bars.find(b => b.observed_at === newest).observed_age}`;
+    let status = '';
+    if (block.last_error && newest != null) {
+      status = `GX10 unreachable since ${clock(block.last_attempt_at)}, showing reading from ${clock(newest)}`;
+    } else if (block.last_error || stale) {
+      status = newest == null ? 'GX10 reading is old' : `GX10 reading is old, from ${clock(newest)}`;
+    }
+    const reason = bars.map(b => b.reason).find(Boolean);
+    if (reason) status += `${status ? ': ' : ''}${reason}`;
+    document.getElementById(id + '-status').textContent = status;
+    document.getElementById(id + '-bars').innerHTML = bars.map(b =>
+      renderBar(b.label, b.pct, esc(b.reset), b.projection == null ? '' : esc(b.projection), true)
+    ).join('<div style="height:6px"></div>');
   }
 
   function renderExtra(extra) {
@@ -268,10 +324,23 @@
 
     const showEta = !!s.show_depletion_estimates;
     const bars = [];
-    if (s.show_session) bars.push(renderBar('Session (5-hour)',    s.session_pct, s.session_reset, s.session_eta, showEta));
-    if (s.show_weekly)  bars.push(renderBar('Weekly (All Models)', s.weekly_pct,  s.weekly_reset,  s.weekly_eta,  showEta));
-    if (s.show_fable)   bars.push(renderBar('Weekly (Fable)',      s.fable_pct,   s.fable_reset,   s.fable_eta,   showEta));
+    if (s.show_session) bars.push(renderBar('Session (5-hour)',    s.session_pct, s.session_reset, `100% ETA: ${s.session_eta || 'Insufficient data'}`, showEta));
+    if (s.show_weekly)  bars.push(renderBar('Weekly (All Models)', s.weekly_pct,  s.weekly_reset,  `100% ETA: ${s.weekly_eta || 'Insufficient data'}`,  showEta));
+    if (s.show_fable)   bars.push(renderBar('Weekly (Fable)',      s.fable_pct,   s.fable_reset,   `100% ETA: ${s.fable_eta || 'Insufficient data'}`,   showEta));
     document.getElementById('bars').innerHTML = bars.join('<div style="height:6px"></div>');
+
+    const showAlt = s.quota_feed_enabled && s.show_alt;
+    const showCodex = s.quota_feed_enabled && s.show_codex;
+    document.getElementById('alt-card').style.display = showAlt ? '' : 'none';
+    document.getElementById('codex-card').style.display = showCodex ? '' : 'none';
+    if (showAlt) renderQuotaCard('alt', s.alt, [
+      { label: 'Session (5-hour)', ...s.alt.session },
+      { label: 'Weekly', ...s.alt.weekly },
+      { label: 'Weekly Fable', ...s.alt.fable },
+    ]);
+    if (showCodex) renderQuotaCard('codex', s.codex, [
+      { label: 'Weekly', ...s.codex.weekly },
+    ]);
 
     document.getElementById('extra').innerHTML = renderExtra(s.extra);
   }
