@@ -136,7 +136,7 @@ pub fn append_pruned(history: &mut QuotaFeedHistory, row: QuotaFeedHistoryRow) -
     true
 }
 
-fn load_history() -> QuotaFeedHistory {
+pub fn load_history() -> QuotaFeedHistory {
     std::fs::read(crate::paths::quota_feed_history()).ok()
         .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }

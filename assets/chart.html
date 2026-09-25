@@ -153,8 +153,13 @@
         <button type="button" data-secs="604800">7d</button>
         <button type="button" data-secs="1209600">14d</button>
       </div>
+      <div class="ranges" id="accounts" hidden>
+        <button type="button" data-account="this-pc">This PC</button>
+        <button type="button" data-account="claude-alt">Claude ALT</button>
+        <button type="button" data-account="codex">Codex</button>
+      </div>
     </div>
-    <div class="legend">
+    <div class="legend" id="legend">
       <div class="legend-item"><div class="swatch session"></div>Session</div>
       <div class="legend-item"><div class="swatch weekly"></div>Weekly</div>
       <div class="legend-item"><div class="swatch fable"></div>Fable</div>
@@ -175,11 +180,17 @@
     grid:    '#2d3340',
     label:   '#b0b0b0',
   };
-  // Each entry is [ts_epoch_secs, session_pct, weekly_pct, fable_pct].
-  // (4th slot carried the retired Sonnet metric on samples before 2026-07.)
-  let history = [];           // full retained history from Rust (≤ 14 days)
-  let view = [];              // `history` clipped to the visible range
+  // Each main entry is [ts_epoch_secs, session_pct, weekly_pct, fable_pct].
+  // The feed entries add Codex in the fifth slot.
+  let mainHistory = [];       // full retained main history from Rust (≤ 14 days)
+  let quotaHistory = [];      // full retained GX10 feed history from Rust
+  let feedConfigured = false;
+  let view = [];              // selected history clipped to the visible range
   let hoverIdx = -1;          // index into `view`, not `history`
+  const THIS_PC = 'this-pc';
+  const CLAUDE_ALT = 'claude-alt';
+  const CODEX = 'codex';
+  let accountMode = loadAccountMode();
   // Selected range: 'auto' sizes the span to the window width; otherwise a
   // fixed number of seconds. Default 'auto'.
   let rangeMode = 'auto';
@@ -193,6 +204,8 @@
   const ctx     = canvas.getContext('2d');
   const tooltip = document.getElementById('tooltip');
   const emptyEl = document.getElementById('empty');
+  const accountsEl = document.getElementById('accounts');
+  const legendEl = document.getElementById('legend');
 
   // Plot geometry — used by both draw() and pickIndex().
   let geom = { padL: 0, padR: 0, padT: 0, padB: 0, gw: 0, gh: 0, t0: 0, tSpan: 1 };
@@ -225,12 +238,66 @@
   // Clip `history` to `rangeSecs`, measured back from the newest sample (where
   // the plot's right edge sits). history is chronological, so drop a leading
   // run. If the window is wider than the data, everything is returned.
-  function clipHistory(rangeSecs) {
+  function clipHistory(history, rangeSecs) {
     if (!history || history.length === 0) return [];
     const cutoff = history[history.length - 1][0] - rangeSecs;
     let i = 0;
     while (i < history.length && history[i][0] < cutoff) i++;
     return history.slice(i);
+  }
+
+  function loadAccountMode() {
+    try {
+      const saved = localStorage.getItem('usage-chart-account');
+      if ([THIS_PC, CLAUDE_ALT, CODEX].includes(saved)) return saved;
+    } catch (_) {}
+    return THIS_PC;
+  }
+
+  function selectedAccount() {
+    if (accountMode !== THIS_PC && !feedConfigured && quotaHistory.length === 0) return THIS_PC;
+    return accountMode;
+  }
+
+  function selectedHistory() {
+    return selectedAccount() === THIS_PC ? mainHistory : quotaHistory;
+  }
+
+  function selectedSeries() {
+    if (selectedAccount() === CODEX) {
+      return [{ idx: 4, color: COLORS.weekly, label: 'Weekly' }];
+    }
+    return [
+      { idx: 1, color: COLORS.session, label: 'Session' },
+      { idx: 2, color: COLORS.weekly, label: 'Weekly' },
+      { idx: 3, color: COLORS.fable, label: 'Fable' },
+    ];
+  }
+
+  function updateAccountUi() {
+    const feedAvailable = feedConfigured || quotaHistory.length > 0;
+    accountsEl.hidden = !feedAvailable;
+    const active = selectedAccount();
+    for (const b of accountsEl.querySelectorAll('button[data-account]')) {
+      b.classList.toggle('active', b.dataset.account === active);
+    }
+    legendEl.innerHTML = selectedSeries().map(s =>
+      `<div class="legend-item"><div class="swatch" style="background:${s.color}"></div>${s.label}</div>`
+    ).join('');
+  }
+
+  function feedEmptyText() {
+    return selectedAccount() === THIS_PC
+      ? null
+      : 'No GX10 readings in the selected range yet.';
+  }
+
+  function isNumber(value) {
+    return typeof value === 'number' && Number.isFinite(value);
+  }
+
+  function formatValue(value) {
+    return isNumber(value) ? value.toFixed(1) + '%' : '--';
   }
 
   function formatTooltipTs(epoch) {
@@ -259,8 +326,10 @@
     const h = canvas.clientHeight;
     ctx.clearRect(0, 0, w, h);
 
+    const history = selectedHistory();
+    const emptyText = feedEmptyText();
     if (!history || history.length < 2) {
-      emptyEl.textContent = 'Insufficient data — waiting for more samples.';
+      emptyEl.textContent = emptyText || 'Insufficient data — waiting for more samples.';
       emptyEl.classList.add('show');
       return;
     }
@@ -272,11 +341,18 @@
 
     // Auto mode sizes the span from gw, so resolve the window now that the
     // plot geometry is known.
-    view = clipHistory(effectiveRangeSecs(gw));
+    view = clipHistory(history, effectiveRangeSecs(gw));
 
     if (view.length < 2) {
       // History exists, but the chosen window is too narrow to hold 2 points.
-      emptyEl.textContent = 'No samples in the selected range yet.';
+      emptyEl.textContent = emptyText || 'No samples in the selected range yet.';
+      emptyEl.classList.add('show');
+      hoverIdx = -1;
+      return;
+    }
+    const series = selectedSeries();
+    if (!view.some(e => series.some(s => isNumber(e[s.idx])))) {
+      emptyEl.textContent = emptyText || 'No samples in the selected range yet.';
       emptyEl.classList.add('show');
       hoverIdx = -1;
       return;
@@ -324,23 +400,24 @@
     }
 
     // Plot each series over the visible window.
-    const series = [
-      { idx: 1, color: COLORS.session },
-      { idx: 2, color: COLORS.weekly  },
-      { idx: 3, color: COLORS.fable   },
-    ];
     for (const s of series) {
       ctx.strokeStyle = s.color;
       ctx.lineWidth   = 2;
       ctx.lineJoin    = 'round';
       ctx.lineCap     = 'round';
       ctx.beginPath();
+      let drawing = false;
       for (let i = 0; i < view.length; i++) {
         const ts  = view[i][0];
         const val = view[i][s.idx];
+        if (!isNumber(val)) {
+          drawing = false;
+          continue;
+        }
         const x = padL + ((ts - t0) / tSpan) * gw;
         const y = padT + (1 - val / 100) * gh;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        if (!drawing) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        drawing = true;
       }
       ctx.stroke();
     }
@@ -356,6 +433,7 @@
       ctx.lineTo(x, padT + gh);
       ctx.stroke();
       for (const s of series) {
+        if (!isNumber(e[s.idx])) continue;
         const y = padT + (1 - e[s.idx] / 100) * gh;
         ctx.fillStyle = s.color;
         ctx.beginPath();
@@ -391,14 +469,11 @@
     }
     if (hoverIdx >= 0) {
       const en = view[hoverIdx];
-      tooltip.innerHTML =
-        `<div class="ts">${formatTooltipTs(en[0])}</div>` +
-        `<div class="row"><div class="dot" style="background:${COLORS.session}"></div>` +
-          `<div class="label">Session</div><div class="val">${en[1].toFixed(1)}%</div></div>` +
-        `<div class="row"><div class="dot" style="background:${COLORS.weekly}"></div>` +
-          `<div class="label">Weekly</div><div class="val">${en[2].toFixed(1)}%</div></div>` +
-        `<div class="row"><div class="dot" style="background:${COLORS.fable}"></div>` +
-          `<div class="label">Fable</div><div class="val">${en[3].toFixed(1)}%</div></div>`;
+      tooltip.innerHTML = `<div class="ts">${formatTooltipTs(en[0])}</div>` +
+        selectedSeries().map(s =>
+          `<div class="row"><div class="dot" style="background:${s.color}"></div>` +
+          `<div class="label">${s.label}</div><div class="val">${formatValue(en[s.idx])}</div></div>`
+        ).join('');
       tooltip.classList.add('show');
       // Position tooltip near mouse, but flip sides if near right edge.
       const tw = tooltip.offsetWidth;
@@ -433,13 +508,37 @@
     draw();
   });
 
+  accountsEl.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button[data-account]');
+    if (!btn) return;
+    accountMode = btn.dataset.account;
+    try { localStorage.setItem('usage-chart-account', accountMode); } catch (_) {}
+    hoverIdx = -1;
+    tooltip.classList.remove('show');
+    updateAccountUi();
+    draw();
+  });
+
   // Rust pushes history here.
   window.applyHistory = function (h) {
-    history = Array.isArray(h) ? h : [];
+    mainHistory = Array.isArray(h) ? h : [];
+    updateAccountUi();
     hoverIdx = -1;
     tooltip.classList.remove('show');
     draw();
   };
+
+  // Rust pushes the GX10 history separately, so the main format stays unchanged.
+  window.applyQuotaHistory = function (h, configured) {
+    quotaHistory = Array.isArray(h) ? h : [];
+    feedConfigured = configured === true;
+    updateAccountUi();
+    hoverIdx = -1;
+    tooltip.classList.remove('show');
+    draw();
+  };
+
+  updateAccountUi();
 
   // Ask Rust for the initial snapshot the moment we're ready.
   if (window.chrome && window.chrome.webview) {

@@ -122,8 +122,20 @@ fn resize_webview_to_parent(webview: &wry::WebView, parent: HWND) {
 
 fn push_history() {
     let hist = crate::usage_history::load();
+    let quota_hist = crate::quota_feed::load_history();
+    let feed_configured = !crate::config_store::load().quota_feed_url.is_empty();
     if let Ok(json) = serde_json::to_string(&hist) {
         let js = format!("window.applyHistory && window.applyHistory({json})");
+        WEBVIEW.with(|c| {
+            if let Some(wv) = c.borrow().as_ref() {
+                let _ = wv.evaluate_script(&js);
+            }
+        });
+    }
+    if let Ok(json) = serde_json::to_string(&quota_hist) {
+        let js = format!(
+            "window.applyQuotaHistory && window.applyQuotaHistory({json}, {feed_configured})"
+        );
         WEBVIEW.with(|c| {
             if let Some(wv) = c.borrow().as_ref() {
                 let _ = wv.evaluate_script(&js);
