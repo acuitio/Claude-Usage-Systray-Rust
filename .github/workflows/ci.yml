@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+# A newer push cancels an older run still in flight, so a slow older build can
+# never publish after a newer one. The release step below also checks run numbers.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -22,14 +31,15 @@ jobs:
           - aarch64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           components: clippy
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.target }}
 
@@ -39,7 +49,7 @@ jobs:
       # reformat + a tuned rustfmt.toml as a "prep for publish" step later.
 
       - name: Clippy
-        run: cargo clippy --all-targets --release --target ${{ matrix.target }} -- -D warnings
+        run: cargo clippy --all-targets --release --locked --target ${{ matrix.target }} -- -D warnings
 
       - name: Build (release)
         run: cargo build --release --locked --target ${{ matrix.target }}
@@ -53,8 +63,50 @@ jobs:
 
       - name: Upload release exe
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ClaudeUsageSystray-${{ matrix.target }}-${{ github.sha }}
           path: target/${{ matrix.target }}/release/ClaudeUsageSystray.exe
           if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ClaudeUsageSystray-*
+          path: release
+
+      - name: Prepare release assets
+        run: |
+          cp "release/ClaudeUsageSystray-x86_64-pc-windows-msvc-${{ github.sha }}/ClaudeUsageSystray.exe" "ClaudeUsageSystray-x86_64-pc-windows-msvc-${{ github.sha }}.exe"
+          cp "release/ClaudeUsageSystray-aarch64-pc-windows-msvc-${{ github.sha }}/ClaudeUsageSystray.exe" "ClaudeUsageSystray-aarch64-pc-windows-msvc-${{ github.sha }}.exe"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Never let an older run take "latest" from a newer build: clients install
+          # any SHA that differs from their own.
+          # Fail closed: only a 404 (no release yet) counts as "no latest".
+          if latest_tag="$(gh api "repos/${GH_REPO}/releases/latest" --jq .tag_name 2>latest.err)"; then :
+          elif grep -q "HTTP 404" latest.err; then latest_tag=""
+          else cat latest.err; exit 1; fi
+          latest_n=0
+          if [[ "$latest_tag" =~ ^build-([0-9]+)$ ]]; then latest_n="${BASH_REMATCH[1]}"; fi
+          if (( latest_n >= RUN_NUMBER )); then
+            echo "build-${latest_n} is already latest; not publishing build-${RUN_NUMBER}"
+            exit 0
+          fi
+          gh release create "build-${RUN_NUMBER}" \
+            "ClaudeUsageSystray-x86_64-pc-windows-msvc-${SHA}.exe" \
+            "ClaudeUsageSystray-aarch64-pc-windows-msvc-${SHA}.exe" \
+            --target "${SHA}" --title "Build ${RUN_NUMBER}" --notes "Commit ${SHA}" --latest

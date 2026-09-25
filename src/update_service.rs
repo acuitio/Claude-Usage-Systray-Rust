@@ -1,9 +1,9 @@
 // In-app self-updater.
 //
-// ~20 s after launch and every 30 min thereafter, the app asks GitHub — via the
-// already-authenticated `gh` CLI — whether a newer *successful* CI build of its
-// own architecture exists on `main`. If so it downloads that artifact, swaps the
-// running exe using the Windows rename-replace dance, and relaunches.
+// ~20 s after launch and every 30 min thereafter, the app asks GitHub's public
+// Releases API whether a newer build of its own architecture exists on `main`.
+// If so it downloads that release asset without a credential, swaps the running
+// exe using the Windows rename-replace dance, and relaunches.
 //
 // Two design points worth remembering:
 //   * The swap + relaunch run on the UI thread (posted via WM_UPDATE_RELAUNCH),
@@ -11,16 +11,10 @@
 //     tray icon *before* the new instance boots and tries to claim them. Doing it
 //     off-thread would leave imgpaste/imgpull dead until the next restart.
 //   * app_state.json lives beside the exe (see paths::state) and is never
-//     touched here, so window positions survive an update — same guarantee a
+//     touched here, so window positions survive an update, the same guarantee a
 //     manual in-place swap relies on.
-//
-// Auth is delegated to `gh` on purpose: the repo is private, so downloads need a
-// credential. Reusing gh's stored login avoids persisting a PAT on disk and
-// avoids hand-rolling the GitHub REST + signed-blob + unzip dance. If gh is
-// absent or unauthenticated every step degrades to a logged no-op — the app is
-// never blocked or broken by the updater.
 
-use std::os::windows::process::CommandExt;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,9 +37,6 @@ pub const WM_UPDATE_RELAUNCH: u32 = WM_APP + 4;
 const REPO: &str = "acuitio/Claude-Usage-Systray-Rust";
 const CHECK_INTERVAL_SECS: u64 = 1800; // 30 min
 const STARTUP_DELAY_SECS:  u64 = 20;   // let first paint + poll settle first
-
-// Suppresses the console window flash when shelling out to gh.exe.
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Commit this binary was built from (full 40-char SHA), or "dev" for local
 /// builds — which never self-update. Set by build.rs from GITHUB_SHA.
@@ -115,7 +106,7 @@ fn check_once() {
 /// tray's "Refresh Now" so a manual click checks for an update as well as
 /// refreshing usage. Clears the once-per-session guard so an explicit click
 /// retries even a SHA already attempted; still honours the `auto_update`
-/// setting and the dev-build skip. The gh calls + download must not run on the
+/// setting and the dev-build skip. The release request + download must not run on the
 /// UI thread, hence the spawn.
 pub fn trigger_check() {
     thread::spawn(|| {
@@ -131,7 +122,7 @@ fn check_once_inner() {
     // An update is already staged and waiting for the UI thread.
     if PENDING.lock().map(|p| p.is_some()).unwrap_or(true) { return; }
 
-    let Some((sha, run_id)) = latest_successful() else { return; };
+    let Some((sha, url, size)) = latest_release() else { return; };
     if sha == BUILD_SHA { return; } // already current
 
     // Attempt each distinct SHA at most once per session.
@@ -141,7 +132,7 @@ fn check_once_inner() {
         *la = Some(sha.clone());
     }
 
-    match download_and_stage(&sha, &run_id) {
+    match download_and_stage(&url, size) {
         Ok(staged) => {
             *PENDING.lock().unwrap() = Some(staged);
             eprintln!("update: staged {sha} — requesting relaunch");
@@ -149,45 +140,121 @@ fn check_once_inner() {
                 unsafe { PostMessageW(h, WM_UPDATE_RELAUNCH, 0, 0); }
             }
         }
-        Err(e) => eprintln!("update: download failed for {sha}: {e}"),
+        Err(e) => {
+            // A failed transfer must not block the periodic retry for this SHA.
+            eprintln!("update: download failed for {sha}: {e}");
+            if let Ok(mut la) = LAST_ATTEMPT.lock() { *la = None; }
+        }
     }
 }
 
-/// Latest *successful* CI run on main → (headSha, runId), via `gh`.
-fn latest_successful() -> Option<(String, String)> {
-    let out = Command::new("gh")
-        .args([
-            "run", "list", "-R", REPO, "--workflow", "CI", "--branch", "main",
-            "--status", "success", "--limit", "1", "--json", "headSha,databaseId",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
-    if !out.status.success() { return None; }
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let first = json.as_array()?.first()?;
-    let sha    = first.get("headSha")?.as_str()?.to_string();
-    let run_id = first.get("databaseId")?.as_i64()?.to_string();
-    Some((sha, run_id))
+/// Latest public release asset for this architecture -> (commit SHA, download URL, size).
+fn latest_release() -> Option<(String, String, u64)> {
+    let api_url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout_read(Duration::from_secs(60))
+        .https_only(true)
+        .build();
+    let response = match agent
+        .get(&api_url)
+        .set("Accept", "application/vnd.github+json")
+        .set("X-GitHub-Api-Version", "2022-11-28")
+        .set("User-Agent", &format!("ClaudeUsageSystray/{BUILD_SHA}"))
+        .call()
+    {
+        Ok(response) => response,
+        Err(e) => {
+            eprintln!("update: latest release request failed: {e}");
+            return None;
+        }
+    };
+    if response.status() != 200 {
+        eprintln!("update: latest release returned HTTP {}", response.status());
+        return None;
+    }
+    let release: serde_json::Value = match serde_json::from_reader(response.into_reader()) {
+        Ok(release) => release,
+        Err(e) => {
+            eprintln!("update: could not parse latest release: {e}");
+            return None;
+        }
+    };
+    let asset = pick_asset(&release, BUILD_TARGET);
+    if asset.is_none() { eprintln!("update: latest release has no matching asset"); }
+    asset
 }
 
-/// Download this arch's artifact for `sha` into a staging dir; return its exe.
-fn download_and_stage(sha: &str, run_id: &str) -> std::io::Result<PathBuf> {
+/// Select an exact, trusted release asset for one build target.
+fn pick_asset(release: &serde_json::Value, target: &str) -> Option<(String, String, u64)> {
+    let prefix = format!("ClaudeUsageSystray-{target}-");
+    let trusted_url_prefix = format!("https://github.com/{REPO}/releases/download/");
+    for asset in release.get("assets")?.as_array()? {
+        let Some(name) = asset.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(sha) = name.strip_prefix(&prefix).and_then(|name| name.strip_suffix(".exe")) else {
+            continue;
+        };
+        if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')) {
+            continue;
+        }
+        let Some(url) = asset
+            .get("browser_download_url")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Some(size) = asset.get("size").and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        if url.starts_with(&trusted_url_prefix) {
+            return Some((sha.to_owned(), url.to_owned(), size));
+        }
+    }
+    None
+}
+
+/// Download a release asset into a staging dir; return its exe. `size` is the
+/// byte count the Releases API reported, so a cleanly truncated body is caught.
+fn download_and_stage(url: &str, size: u64) -> std::io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
     let staging = staging_dir(&exe);
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging)?;
 
-    let artifact = format!("ClaudeUsageSystray-{BUILD_TARGET}-{sha}");
-    let status = Command::new("gh")
-        .args(["run", "download", run_id, "-R", REPO, "--name", &artifact, "--dir"])
-        .arg(&staging)
-        .creation_flags(CREATE_NO_WINDOW)
-        .status()?;
-    if !status.success() {
-        return Err(io_err("gh run download failed"));
+    let response = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout_read(Duration::from_secs(300))
+        .https_only(true)
+        .build()
+        .get(url)
+        .set("User-Agent", &format!("ClaudeUsageSystray/{BUILD_SHA}"))
+        .call()
+        .map_err(|e| std::io::Error::other(format!("release download request failed: {e}")))?;
+    if response.status() != 200 {
+        return Err(std::io::Error::other(format!(
+            "release download returned HTTP {}",
+            response.status()
+        )));
     }
     let staged_exe = staging.join("ClaudeUsageSystray.exe");
+    let mut body = response.into_reader();
+    let mut file = std::fs::File::create(&staged_exe)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut total = 0_u64;
+    loop {
+        let read = body.read(&mut buffer)?;
+        if read == 0 { break; }
+        total += read as u64;
+        if total > 64 * 1024 * 1024 {
+            return Err(io_err("release download exceeds 64 MiB"));
+        }
+        file.write_all(&buffer[..read])?;
+    }
+    if total != size {
+        return Err(io_err("release download size does not match the release asset"));
+    }
     validate_exe(&staged_exe)?;
     Ok(staged_exe)
 }
@@ -201,10 +268,7 @@ fn validate_exe(p: &Path) -> std::io::Result<()> {
         return Err(io_err("staged exe implausibly small"));
     }
     let mut sig = [0u8; 2];
-    {
-        use std::io::Read;
-        std::fs::File::open(p)?.read_exact(&mut sig)?;
-    }
+    std::fs::File::open(p)?.read_exact(&mut sig)?;
     if &sig != b"MZ" {
         return Err(io_err("staged exe missing PE header"));
     }
@@ -215,9 +279,8 @@ fn validate_exe(p: &Path) -> std::io::Result<()> {
 /// into place, and launch it. Runs on the UI thread. Returns true iff the new
 /// process was launched — the caller then releases hotkeys/tray and quits.
 ///
-/// On a mid-swap failure it rolls back so the current process stays launchable.
-/// If only the final spawn fails, the new exe is already in place, so the next
-/// logon starts it — no rollback needed there.
+/// On any failure, including the final spawn, it rolls back so the original exe
+/// is back at the startup path and the current process keeps running.
 pub fn install_pending() -> bool {
     let Some(staged) = PENDING.lock().ok().and_then(|mut p| p.take()) else { return false; };
     let Ok(exe) = std::env::current_exe() else { return false; };
@@ -238,9 +301,19 @@ pub fn install_pending() -> bool {
     match Command::new(&exe).current_dir(&dir).spawn() {
         Ok(_) => { eprintln!("update: relaunched new build"); true }
         Err(e) => {
-            // New exe is already in place; next logon will run it. Keep serving
-            // from the renamed .old file until then.
-            eprintln!("update: relaunch spawn failed: {e}; will apply on next start");
+            // Windows could not start the new exe: put the original back so the
+            // next logon does not try to launch a build that cannot run.
+            eprintln!("update: relaunch spawn failed: {e}; rolling back");
+            if let Err(e) = std::fs::rename(&exe, &staged) {
+                eprintln!("update: could not move new exe aside: {e}; deleting it");
+                if let Err(e) = std::fs::remove_file(&exe) {
+                    eprintln!("update: ROLLBACK FAILED, restore {} by hand: {e}", old.display());
+                    return false;
+                }
+            }
+            if let Err(e) = std::fs::rename(&old, &exe) {
+                eprintln!("update: ROLLBACK FAILED, restore {} by hand: {e}", old.display());
+            }
             false
         }
     }
@@ -267,4 +340,76 @@ fn io_err(msg: &'static str) -> std::io::Error {
     // `Error::other` (not `Error::new(ErrorKind::Other, …)`) — the latter trips
     // clippy::io_other_error under -D warnings on recent stable toolchains.
     std::io::Error::other(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{pick_asset, REPO};
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+    const X64: &str = "x86_64-pc-windows-msvc";
+    const ARM64: &str = "aarch64-pc-windows-msvc";
+
+    fn asset(target: &str, sha: &str, url: &str) -> serde_json::Value {
+        json!({
+            "name": format!("ClaudeUsageSystray-{target}-{sha}.exe"),
+            "browser_download_url": url,
+            "size": 123_456,
+        })
+    }
+
+    #[test]
+    fn picks_matching_x64_asset() {
+        let url = format!("https://github.com/{REPO}/releases/download/build-7/x64.exe");
+        let release = json!({ "assets": [asset(X64, SHA, &url)] });
+
+        assert_eq!(pick_asset(&release, X64), Some((SHA.to_owned(), url, 123_456)));
+    }
+
+    #[test]
+    fn ignores_other_target_before_matching_asset() {
+        let arm_url = format!("https://github.com/{REPO}/releases/download/build-7/arm64.exe");
+        let x64_url = format!("https://github.com/{REPO}/releases/download/build-7/x64.exe");
+        let release = json!({
+            "assets": [asset(ARM64, SHA, &arm_url), asset(X64, SHA, &x64_url)],
+        });
+
+        assert_eq!(pick_asset(&release, X64), Some((SHA.to_owned(), x64_url, 123_456)));
+    }
+
+    #[test]
+    fn rejects_non_hex_sha() {
+        let url = format!("https://github.com/{REPO}/releases/download/build-7/x64.exe");
+        let release = json!({ "assets": [asset(X64, "0123456789abcdef0123456789abcdef0123456G", &url)] });
+
+        assert_eq!(pick_asset(&release, X64), None);
+    }
+
+    #[test]
+    fn rejects_download_urls_outside_the_release_repo() {
+        let other_host = asset(X64, SHA, "https://example.com/download/x64.exe");
+        let other_repo = asset(
+            X64,
+            SHA,
+            "https://github.com/acuitio/another-repo/releases/download/build-7/x64.exe",
+        );
+        let release = json!({ "assets": [other_host, other_repo] });
+
+        assert_eq!(pick_asset(&release, X64), None);
+    }
+
+    #[test]
+    fn rejects_uppercase_sha() {
+        let url = format!("https://github.com/{REPO}/releases/download/build-7/x64.exe");
+        let release = json!({ "assets": [asset(X64, &SHA.to_uppercase(), &url)] });
+
+        assert_eq!(pick_asset(&release, X64), None);
+    }
+
+    #[test]
+    fn returns_none_when_assets_are_missing() {
+        assert_eq!(pick_asset(&json!({}), X64), None);
+    }
 }

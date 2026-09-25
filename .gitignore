@@ -1,6 +1,5 @@
 # Rust build output
 target/
-Cargo.lock
 
 # Visual Studio / Rider / VS Code
 .vs/

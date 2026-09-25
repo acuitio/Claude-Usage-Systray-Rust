@@ -38,9 +38,9 @@ What's implemented:
 - **imgpaste — `Alt+Shift+V` uploads the clipboard image over SCP and
   pastes the resulting remote path into the focused window.** See
   the "imgpaste" section below.
-- **Self-update — checks GitHub CI for a newer build (~20 s after launch,
-  then every 30 min, and on "Refresh Now"), downloads the matching-arch
-  artifact, swaps the running exe in place, and relaunches.** Window
+- **Self-update:** checks public GitHub Releases for a newer build (~20 s after
+  launch, then every 30 min, and on "Refresh Now"), downloads the matching-arch
+  artifact, swaps the running exe in place, and relaunches. Window
   positions survive because config lives beside the exe. See the
   "Self-update" section below.
 
@@ -88,13 +88,14 @@ See [BUILD.md](BUILD.md) for how to build and run.
 
 ## Self-update
 
-The app keeps itself current from CI with no manual download. A background
+The app keeps itself current from public GitHub Releases with no manual download.
+CI publishes a Release on each green push to `main`. A background
 thread checks ~20 s after launch and every 30 minutes; **"Refresh Now" (tray
 menu) triggers an immediate check** alongside the usage refresh:
 
-1. Asks GitHub for the latest *successful* CI run on `main` (via the `gh`
-   CLI) and compares its commit SHA against this binary's embedded build SHA.
-2. If newer, downloads the artifact for *this* architecture, validates it
+1. Asks GitHub anonymously for the latest Release and compares its commit SHA
+   against this binary's embedded build SHA.
+2. If newer, downloads the Release asset for *this* architecture, validates it
    (plausible size + `MZ` PE header), and stages it beside the exe.
 3. Renames the running exe aside (`<exe>.old`), moves the new one into place,
    relaunches, then the fresh process deletes the leftover `.old` on boot.
@@ -111,13 +112,11 @@ Config in `app_state.json`:
 | `auto_update` | `true` | Master switch. Set `false` (or untick "Automatically install updates" in Settings) to disable both the periodic check and the "Refresh Now" check. |
 
 **Prerequisites:**
-- The [GitHub CLI](https://cli.github.com) (`gh`) installed and authenticated
-  (`gh auth login`). The repo is private, so downloads need a credential; the
-  updater reuses your `gh` login rather than storing a token on disk. If `gh`
-  is missing or logged out, every check is a logged no-op — the app is never
-  blocked or broken by it.
 - Local/dev builds (compiled without CI) carry no build SHA and never
   self-update, so a local checkout won't clobber itself with a CI artifact.
+- Releases are public and the updater needs no GitHub login, token, or `gh`
+  installation. Failed network checks are logged no-ops, so the app is never
+  blocked or broken by an unavailable release.
 
 ## Why a Rust rewrite?
 
@@ -148,7 +147,7 @@ src/
 ├── settings.rs    — controls dialog (BUTTON / COMBOBOX / EDIT / UPDOWN
 │                    + ChooseColor)
 ├── imgpaste.rs    — clipboard image → SCP upload → SendInput(Ctrl+V)
-└── update_service.rs — self-update: gh detect → download → in-place swap → relaunch
+└── update_service.rs: self-update from public Releases, download, in-place swap, relaunch
 ```
 (Plus `poll_service`, `usage_fetcher`, `oauth_refresh`, `health`, `imgpull`,
 `chart`, `state_store`, and the `build.rs` that embeds the build SHA.)

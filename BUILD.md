@@ -1,22 +1,12 @@
 # Build & Run
 
-## Quickest path: download prebuilt binaries from CI
+## Quickest path: download prebuilt binaries from Releases
 
 You don't need to install anything if you only want to run the app.
-Every push to `main` produces both an x64 and an ARM64 `.exe` as a
-GitHub Actions workflow artifact. Grab the latest:
-
-```powershell
-gh run list --workflow=ci.yml --branch=main --limit=1
-# note the run id from the first column, then:
-gh run download <run-id> --dir dist
-```
-
-You'll get two directories named
-`ClaudeUsageSystray-x86_64-pc-windows-msvc-<sha>/` and
-`ClaudeUsageSystray-aarch64-pc-windows-msvc-<sha>/`, each containing a
-single `ClaudeUsageSystray.exe`. Pick the one matching your CPU
-architecture. To check your machine's architecture:
+Every green push to `main` publishes both an x64 and an ARM64 `.exe` on the
+repository's [Releases page](https://github.com/acuitio/Claude-Usage-Systray-Rust/releases).
+Download the asset matching your CPU architecture, then rename or copy it to
+`dist\ClaudeUsageSystray.exe`. To check your machine's architecture:
 `(Get-WmiObject Win32_Processor).Architecture` (9 = x64, 12 = ARM64).
 
 ### Installing the downloaded binary
@@ -29,8 +19,7 @@ stopping any running instance first:
 ```powershell
 # Stop the previous instance (if any), then install + launch
 Get-Process ClaudeUsageSystray -ErrorAction SilentlyContinue | Stop-Process -Force
-Copy-Item dist\ClaudeUsageSystray-x86_64-pc-windows-msvc-<sha>\ClaudeUsageSystray.exe `
-  dist\ClaudeUsageSystray.exe -Force
+Copy-Item <downloaded-release-asset>.exe dist\ClaudeUsageSystray.exe -Force
 Start-Process dist\ClaudeUsageSystray.exe
 ```
 
