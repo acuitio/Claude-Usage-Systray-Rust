@@ -37,7 +37,10 @@ use crate::config_store;
 /// staged. Handled on the UI thread so hotkeys/tray release cleanly first.
 pub const WM_UPDATE_RELAUNCH: u32 = WM_APP + 4;
 
-const REPO: &str = "paulmah79/Claude-Usage-Systray-Rust";
+// Moved from paulmah79 on 2026-09-25. Builds still pointing at the old name
+// keep upgrading through GitHub's transfer redirect, so never recreate a repo
+// under the old name.
+const REPO: &str = "acuitio/Claude-Usage-Systray-Rust";
 const CHECK_INTERVAL_SECS: u64 = 1800; // 30 min
 const STARTUP_DELAY_SECS:  u64 = 20;   // let first paint + poll settle first
 
