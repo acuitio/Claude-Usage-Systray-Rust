@@ -94,9 +94,13 @@ pub fn ensure_installed() -> bool {
 }
 
 fn download_bootstrapper(dest: &Path) -> Result<(), String> {
+    // ureq never picks native-tls by itself; without a connector HTTPS fails.
+    let tls = ureq::native_tls::TlsConnector::new()
+        .map_err(|e| format!("TLS connector: {e}"))?;
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
         .timeout_read(Duration::from_secs(60))
+        .tls_connector(std::sync::Arc::new(tls))
         .build();
     let resp = agent.get(BOOTSTRAPPER_URL).call()
         .map_err(|e| format!("HTTP error: {e}"))?;

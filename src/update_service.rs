@@ -148,14 +148,30 @@ fn check_once_inner() {
     }
 }
 
+/// HTTPS-only agent for the release API and asset download. ureq 2.x never
+/// picks native-tls on its own (see poll_service::build_http_agent), so an
+/// agent built without `tls_connector` fails every request with "no TLS
+/// backend is configured". Builds 1-4 shipped that way and could not update.
+fn https_agent(read_secs: u64) -> Option<ureq::Agent> {
+    let tls = match ureq::native_tls::TlsConnector::new() {
+        Ok(tls) => tls,
+        Err(e) => {
+            eprintln!("update: TLS connector unavailable: {e}");
+            return None;
+        }
+    };
+    Some(ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout_read(Duration::from_secs(read_secs))
+        .https_only(true)
+        .tls_connector(std::sync::Arc::new(tls))
+        .build())
+}
+
 /// Latest public release asset for this architecture -> (commit SHA, download URL, size).
 fn latest_release() -> Option<(String, String, u64)> {
     let api_url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(15))
-        .timeout_read(Duration::from_secs(60))
-        .https_only(true)
-        .build();
+    let agent = https_agent(60)?;
     let response = match agent
         .get(&api_url)
         .set("Accept", "application/vnd.github+json")
@@ -223,11 +239,8 @@ fn download_and_stage(url: &str, size: u64) -> std::io::Result<PathBuf> {
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging)?;
 
-    let response = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(15))
-        .timeout_read(Duration::from_secs(300))
-        .https_only(true)
-        .build()
+    let agent = https_agent(300).ok_or_else(|| io_err("no TLS connector"))?;
+    let response = agent
         .get(url)
         .set("User-Agent", &format!("ClaudeUsageSystray/{BUILD_SHA}"))
         .call()
